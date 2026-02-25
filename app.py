@@ -690,4 +690,104 @@ if not df.empty:
             
             yoy = df_filtrado.groupby(['Año', 'CategoriaResiduo']).size().reset_index(name='Cantidad')
             
-            fig_y
+            if not yoy.empty:
+                fig_yoy = px.line(
+                    yoy,
+                    x='Año',
+                    y='Cantidad',
+                    color='CategoriaResiduo',
+                    title='Crecimiento Interanual por Tipo de Residuo',
+                    markers=True,
+                    color_discrete_map={'peligrosos': '#e74c3c', 'no peligrosos': '#2ecc71', 'mixtas': '#f39c12'}
+                )
+                st.plotly_chart(fig_yoy, use_container_width=True, key="line_yoy")
+            else:
+                st.info("No hay datos suficientes para el análisis de crecimiento interanual")
+        else:
+            st.info("No hay datos suficientes para el análisis temporal")
+
+    with tab6:
+        st.header("Datos Detallados")
+        
+        if not df_filtrado.empty:
+            # Selector de columnas a mostrar
+            columnas_disponibles = ['IDLicitacion', 'NombreLicitacion', 'Tipo', 'Estado', 'FechaPublicacion',
+                                   'Organismo', 'Region', 'CategoriaResiduo', 'ConfianzaClasificacion',
+                                   'MontoLicitacion', 'Monto_CLP_Millones', 'Tamaño_Licitacion']
+            
+            columnas_mostrar = st.multiselect(
+                "Selecciona columnas a mostrar",
+                options=columnas_disponibles,
+                default=['IDLicitacion', 'NombreLicitacion', 'Organismo', 'Region', 
+                        'CategoriaResiduo', 'FechaPublicacion', 'MontoLicitacion'],
+                key="select_columnas"
+            )
+            
+            if columnas_mostrar:
+                df_display = df_filtrado[columnas_mostrar].copy()
+                
+                # Formatear fecha para mejor visualización
+                if 'FechaPublicacion' in df_display.columns:
+                    df_display['FechaPublicacion'] = df_display['FechaPublicacion'].dt.strftime('%d/%m/%Y')
+                
+                # Mostrar tabla con formato mejorado
+                st.dataframe(
+                    df_display,
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config={
+                        "Monto_CLP_Millones": st.column_config.NumberColumn(
+                            "Monto (MM CLP)",
+                            format="$ %.2fM"
+                        ),
+                        "MontoLicitacion": st.column_config.TextColumn(
+                            "Monto Original"
+                        ),
+                        "CategoriaResiduo": st.column_config.TextColumn(
+                            "Tipo Residuo"
+                        )
+                    },
+                    key="dataframe_detallado"
+                )
+                
+                # Estadísticas y descargas
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    st.info(f"**Total registros:** {len(df_display)}")
+                    if not df_filtrado['FechaPublicacion'].empty:
+                        fecha_min = df_filtrado['FechaPublicacion'].min().strftime('%d/%m/%Y')
+                        fecha_max = df_filtrado['FechaPublicacion'].max().strftime('%d/%m/%Y')
+                        st.info(f"**Rango de fechas:** {fecha_min} a {fecha_max}")
+                    
+                    # Resumen por tipo de residuo
+                    resumen = df_filtrado['CategoriaResiduo'].value_counts()
+                    st.info(f"**Distribución:** {', '.join([f'{k}: {v}' for k, v in resumen.items()])}")
+                
+                with col2:
+                    # Botón de descarga
+                    csv = df_display.to_csv(index=False, encoding='utf-8-sig')
+                    st.download_button(
+                        label="📥 Descargar datos como CSV",
+                        data=csv,
+                        file_name=f"licitaciones_residuos_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                        mime="text/csv",
+                        type="primary",
+                        key="download_button"
+                    )
+            else:
+                st.warning("Selecciona al menos una columna para mostrar")
+        else:
+            st.info("No hay datos para mostrar")
+
+    # Footer
+    st.markdown("---")
+    st.markdown("""
+        <div style='text-align: center; color: #666; padding: 10px;'>
+            <p>♻️ Analizador de Compras Ágiles - Gestión de Residuos | Desarrollado con Streamlit y Python</p>
+            <p style='font-size: 0.8em;'>Clasificación automática por tipo de residuo con nivel de confianza</p>
+        </div>
+    """, unsafe_allow_html=True)
+
+else:
+    st.warning("👆 Por favor, sube un archivo CSV válido usando el botón en la barra lateral izquierda.")
