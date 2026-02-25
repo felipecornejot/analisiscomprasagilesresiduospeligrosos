@@ -1,22 +1,33 @@
 import streamlit as st
-import pandas as pd
-import numpy as np
-import plotly.express as px
-import plotly.graph_objects as go
-from plotly.subplots import make_subplots
-import re
-from datetime import datetime
-import warnings
-import os
-warnings.filterwarnings('ignore')
 
-# Configuración de la página - DEBE SER EL PRIMER COMANDO DE STREAMLIT
+# Configuración de la página - PRIMERO SIEMPRE
 st.set_page_config(
     page_title="Analizador de Compras Ágiles - Residuos",
     page_icon="♻️",
     layout="wide",
     initial_sidebar_state="expanded"
 )
+
+# Verificar imports
+try:
+    import plotly.express as px
+    import plotly.graph_objects as go
+    from plotly.subplots import make_subplots
+except ImportError as e:
+    st.error(f"""
+    ❌ **Error de importación: {e}**
+    
+    Por favor, verifica que todas las dependencias estén instaladas.
+    """)
+    st.stop()
+
+import pandas as pd
+import numpy as np
+import re
+from datetime import datetime
+import warnings
+import os
+warnings.filterwarnings('ignore')
 
 # Título y descripción principal
 st.title("♻️ Analizador de Compras Ágiles - Gestión de Residuos")
@@ -191,7 +202,8 @@ with st.sidebar:
     uploaded_file = st.file_uploader(
         "Cargar archivo CSV de licitaciones",
         type=['csv'],
-        help="Sube el archivo CSV con los datos de licitaciones. Si no subes ninguno, se usará el archivo base del repositorio."
+        help="Sube el archivo CSV con los datos de licitaciones. Si no subes ninguno, se usará el archivo base del repositorio.",
+        key="file_uploader"
     )
     
     # Cargar datos
@@ -218,14 +230,16 @@ with st.sidebar:
         años_seleccionados = st.multiselect(
             "Años",
             options=años_disponibles,
-            default=años_disponibles if años_disponibles else []
+            default=años_disponibles if años_disponibles else [],
+            key="filtro_anos"
         )
         
         regiones_disponibles = sorted(df['Region'].dropna().unique())
         regiones_seleccionadas = st.multiselect(
             "Regiones",
             options=regiones_disponibles,
-            default=regiones_disponibles if regiones_disponibles else []
+            default=regiones_disponibles if regiones_disponibles else [],
+            key="filtro_regiones"
         )
         
         # Filtro por categoría de residuo
@@ -233,7 +247,8 @@ with st.sidebar:
         categorias_seleccionadas = st.multiselect(
             "🗑️ Tipo de Residuo",
             options=categorias_residuo,
-            default=categorias_residuo if categorias_residuo else []
+            default=categorias_residuo if categorias_residuo else [],
+            key="filtro_categoria"
         )
         
         # Filtro por nivel de confianza
@@ -241,14 +256,15 @@ with st.sidebar:
         confianza_seleccionada = st.multiselect(
             "🎯 Nivel de Confianza",
             options=confianza_disponible,
-            default=confianza_disponible if confianza_disponible else []
+            default=confianza_disponible if confianza_disponible else [],
+            key="filtro_confianza"
         )
         
         # Filtro de búsqueda por texto
-        busqueda = st.text_input("🔎 Buscar en nombre u organismo", "")
+        busqueda = st.text_input("🔎 Buscar en nombre u organismo", "", key="busqueda_texto")
         
         # Botón para aplicar filtros
-        aplicar_filtros = st.button("🔄 Aplicar Filtros", type="primary")
+        aplicar_filtros = st.button("🔄 Aplicar Filtros", type="primary", key="boton_filtros")
     else:
         st.error("❌ No se pudieron cargar los datos")
 
@@ -351,7 +367,7 @@ if not df.empty:
                     color_discrete_map=color_map
                 )
                 fig_residuos.update_traces(textposition='inside', textinfo='percent+label')
-                st.plotly_chart(fig_residuos, use_container_width=True)
+                st.plotly_chart(fig_residuos, use_container_width=True, key="pie_residuos")
             else:
                 st.info("No hay datos suficientes para mostrar el gráfico")
         
@@ -369,7 +385,7 @@ if not df.empty:
                     color='ConfianzaClasificacion',
                     color_discrete_map={'alta': '#2ecc71', 'media (inferencia)': '#f39c12'}
                 )
-                st.plotly_chart(fig_confianza, use_container_width=True)
+                st.plotly_chart(fig_confianza, use_container_width=True, key="bar_confianza")
             else:
                 st.info("No hay datos suficientes para mostrar el gráfico")
         
@@ -386,7 +402,7 @@ if not df.empty:
                 markers=True,
                 color_discrete_map={'peligrosos': '#e74c3c', 'no peligrosos': '#2ecc71', 'mixtas': '#f39c12'}
             )
-            st.plotly_chart(fig_evolucion_tipo, use_container_width=True)
+            st.plotly_chart(fig_evolucion_tipo, use_container_width=True, key="line_evolucion_tipo")
 
     with tab2:
         st.header("Análisis Detallado por Tipo de Residuo")
@@ -395,7 +411,8 @@ if not df.empty:
             # Selector de tipo de residuo
             tipo_analisis = st.selectbox(
                 "Selecciona tipo de residuo para análisis detallado",
-                options=['Todos'] + sorted(df_filtrado['CategoriaResiduo'].unique())
+                options=['Todos'] + sorted(df_filtrado['CategoriaResiduo'].unique()),
+                key="select_tipo_analisis"
             )
             
             df_tipo = df_filtrado if tipo_analisis == 'Todos' else df_filtrado[df_filtrado['CategoriaResiduo'] == tipo_analisis]
@@ -428,7 +445,7 @@ if not df.empty:
                             color_continuous_scale='Viridis'
                         )
                         fig_top_tipo.update_layout(xaxis_title="Cantidad de Licitaciones", yaxis_title="")
-                        st.plotly_chart(fig_top_tipo, use_container_width=True)
+                        st.plotly_chart(fig_top_tipo, use_container_width=True, key="bar_top_tipo")
                 
                 with col2:
                     # Distribución por tamaño de licitación
@@ -442,7 +459,7 @@ if not df.empty:
                         title=f'Distribución por Tamaño - {tipo_analisis}',
                         hole=0.3
                     )
-                    st.plotly_chart(fig_tamaño, use_container_width=True)
+                    st.plotly_chart(fig_tamaño, use_container_width=True, key="pie_tamaño")
                 
                 # Distribución regional para este tipo de residuo
                 region_tipo = df_tipo['Region'].value_counts().reset_index()
@@ -457,7 +474,7 @@ if not df.empty:
                     color='Cantidad',
                     color_continuous_scale='Reds'
                 )
-                st.plotly_chart(fig_region_tipo, use_container_width=True)
+                st.plotly_chart(fig_region_tipo, use_container_width=True, key="bar_region_tipo")
         else:
             st.info("No hay datos suficientes para el análisis por tipo de residuo")
 
@@ -468,7 +485,8 @@ if not df.empty:
             # Selector de región para análisis detallado
             region_analisis = st.selectbox(
                 "Selecciona una región para análisis detallado",
-                options=['Todas'] + sorted(df_filtrado['Region'].unique())
+                options=['Todas'] + sorted(df_filtrado['Region'].unique()),
+                key="select_region_analisis"
             )
             
             df_region = df_filtrado if region_analisis == 'Todas' else df_filtrado[df_filtrado['Region'] == region_analisis]
@@ -503,7 +521,7 @@ if not df.empty:
                         color='CategoriaResiduo',
                         color_discrete_map={'peligrosos': '#e74c3c', 'no peligrosos': '#2ecc71', 'mixtas': '#f39c12'}
                     )
-                    st.plotly_chart(fig_residuo_region, use_container_width=True)
+                    st.plotly_chart(fig_residuo_region, use_container_width=True, key="pie_residuo_region")
                 
                 with col2:
                     # Top organismos en la región
@@ -518,7 +536,7 @@ if not df.empty:
                             color_continuous_scale='Viridis'
                         )
                         fig_top_region.update_layout(xaxis_title="Cantidad", yaxis_title="")
-                        st.plotly_chart(fig_top_region, use_container_width=True)
+                        st.plotly_chart(fig_top_region, use_container_width=True, key="bar_top_region")
                 
                 # Evolución en la región
                 evolucion_region = df_region.groupby(['Año', 'CategoriaResiduo']).size().reset_index(name='Cantidad')
@@ -532,7 +550,7 @@ if not df.empty:
                         markers=True,
                         color_discrete_map={'peligrosos': '#e74c3c', 'no peligrosos': '#2ecc71', 'mixtas': '#f39c12'}
                     )
-                    st.plotly_chart(fig_evol_region, use_container_width=True)
+                    st.plotly_chart(fig_evol_region, use_container_width=True, key="line_evol_region")
         else:
             st.info("No hay datos suficientes para el análisis regional")
 
@@ -569,7 +587,7 @@ if not df.empty:
                         text='Cantidad'
                     )
                     fig_top.update_layout(yaxis={'categoryorder':'total ascending'})
-                    st.plotly_chart(fig_top, use_container_width=True)
+                    st.plotly_chart(fig_top, use_container_width=True, key="bar_top_organismos")
                 
                 with col2:
                     # Tabla resumen
@@ -585,7 +603,8 @@ if not df.empty:
                             "CategoriaResiduo": st.column_config.TextColumn(
                                 "Tipo Principal"
                             )
-                        }
+                        },
+                        key="tabla_top_organismos"
                     )
                 
                 # Gráfico de burbujas: Cantidad vs Monto
@@ -600,7 +619,7 @@ if not df.empty:
                     labels={'Cantidad': 'Número de Licitaciones', 'Monto_Total_MM': 'Monto Total (MM CLP)'},
                     color_discrete_map={'peligrosos': '#e74c3c', 'no peligrosos': '#2ecc71', 'mixtas': '#f39c12'}
                 )
-                st.plotly_chart(fig_burbujas, use_container_width=True)
+                st.plotly_chart(fig_burbujas, use_container_width=True, key="scatter_burbujas")
         else:
             st.info("No hay datos suficientes para el análisis por organismo")
 
@@ -625,7 +644,7 @@ if not df.empty:
                     )
                     fig_mensual.update_xaxes(title_text="Mes-Año", tickangle=45)
                     fig_mensual.update_yaxes(title_text="Cantidad")
-                    st.plotly_chart(fig_mensual, use_container_width=True)
+                    st.plotly_chart(fig_mensual, use_container_width=True, key="line_tendencia_mensual")
             
             with col2:
                 # Distribución por trimestre
@@ -643,7 +662,7 @@ if not df.empty:
                     )
                     fig_trimestral.update_xaxes(title_text="Año-Trimestre", tickangle=45)
                     fig_trimestral.update_yaxes(title_text="Cantidad")
-                    st.plotly_chart(fig_trimestral, use_container_width=True)
+                    st.plotly_chart(fig_trimestral, use_container_width=True, key="bar_trimestral")
             
             # Análisis de estacionalidad por tipo de residuo
             st.subheader("Patrón Estacional por Tipo de Residuo")
@@ -664,105 +683,11 @@ if not df.empty:
                     color_discrete_map={'peligrosos': '#e74c3c', 'no peligrosos': '#2ecc71', 'mixtas': '#f39c12'}
                 )
                 fig_estacional.update_layout(xaxis_title="Mes", yaxis_title="Cantidad")
-                st.plotly_chart(fig_estacional, use_container_width=True)
+                st.plotly_chart(fig_estacional, use_container_width=True, key="bar_estacional")
             
             # Análisis YoY (Year over Year)
             st.subheader("Crecimiento Interanual por Tipo de Residuo")
             
             yoy = df_filtrado.groupby(['Año', 'CategoriaResiduo']).size().reset_index(name='Cantidad')
             
-            fig_yoy = px.line(
-                yoy,
-                x='Año',
-                y='Cantidad',
-                color='CategoriaResiduo',
-                title='Evolución por Tipo de Residuo',
-                markers=True,
-                color_discrete_map={'peligrosos': '#e74c3c', 'no peligrosos': '#2ecc71', 'mixtas': '#f39c12'}
-            )
-            st.plotly_chart(fig_yoy, use_container_width=True)
-        else:
-            st.info("No hay datos suficientes para el análisis temporal")
-
-    with tab6:
-        st.header("Datos Detallados")
-        
-        if not df_filtrado.empty:
-            # Selector de columnas a mostrar
-            columnas_disponibles = ['IDLicitacion', 'NombreLicitacion', 'Tipo', 'Estado', 'FechaPublicacion',
-                                   'Organismo', 'Region', 'CategoriaResiduo', 'ConfianzaClasificacion',
-                                   'MontoLicitacion', 'Monto_CLP_Millones', 'Tamaño_Licitacion']
-            
-            columnas_mostrar = st.multiselect(
-                "Selecciona columnas a mostrar",
-                options=columnas_disponibles,
-                default=['IDLicitacion', 'NombreLicitacion', 'Organismo', 'Region', 
-                        'CategoriaResiduo', 'FechaPublicacion', 'MontoLicitacion']
-            )
-            
-            if columnas_mostrar:
-                df_display = df_filtrado[columnas_mostrar].copy()
-                
-                # Formatear fecha para mejor visualización
-                if 'FechaPublicacion' in df_display.columns:
-                    df_display['FechaPublicacion'] = df_display['FechaPublicacion'].dt.strftime('%d/%m/%Y')
-                
-                # Mostrar tabla con formato mejorado
-                st.dataframe(
-                    df_display,
-                    use_container_width=True,
-                    hide_index=True,
-                    column_config={
-                        "Monto_CLP_Millones": st.column_config.NumberColumn(
-                            "Monto (MM CLP)",
-                            format="$ %.2fM"
-                        ),
-                        "MontoLicitacion": st.column_config.TextColumn(
-                            "Monto Original"
-                        ),
-                        "CategoriaResiduo": st.column_config.TextColumn(
-                            "Tipo Residuo"
-                        )
-                    }
-                )
-                
-                # Estadísticas y descargas
-                col1, col2 = st.columns(2)
-                
-                with col1:
-                    st.info(f"**Total registros:** {len(df_display)}")
-                    if not df_filtrado['FechaPublicacion'].empty:
-                        fecha_min = df_filtrado['FechaPublicacion'].min().strftime('%d/%m/%Y')
-                        fecha_max = df_filtrado['FechaPublicacion'].max().strftime('%d/%m/%Y')
-                        st.info(f"**Rango de fechas:** {fecha_min} a {fecha_max}")
-                    
-                    # Resumen por tipo de residuo
-                    resumen = df_filtrado['CategoriaResiduo'].value_counts()
-                    st.info(f"**Distribución:** {', '.join([f'{k}: {v}' for k, v in resumen.items()])}")
-                
-                with col2:
-                    # Botón de descarga
-                    csv = df_display.to_csv(index=False, encoding='utf-8-sig')
-                    st.download_button(
-                        label="📥 Descargar datos como CSV",
-                        data=csv,
-                        file_name=f"licitaciones_residuos_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-                        mime="text/csv",
-                        type="primary"
-                    )
-            else:
-                st.warning("Selecciona al menos una columna para mostrar")
-        else:
-            st.info("No hay datos para mostrar")
-
-    # Footer
-    st.markdown("---")
-    st.markdown("""
-        <div style='text-align: center; color: #666; padding: 10px;'>
-            <p>♻️ Analizador de Compras Ágiles - Gestión de Residuos | Desarrollado con Streamlit y Python</p>
-            <p style='font-size: 0.8em;'>Clasificación automática por tipo de residuo con nivel de confianza</p>
-        </div>
-    """, unsafe_allow_html=True)
-
-else:
-    st.warning("👆 Por favor, sube un archivo CSV válido usando el botón en la barra lateral izquierda.")
+            fig_y
