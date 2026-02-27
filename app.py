@@ -650,7 +650,6 @@ with tab4:
 
         # Si quieres mantener solo empresas con ingresos > 0, déjalo:
         resumen_empresas = resumen_empresas[resumen_empresas["Ingresos"] > 0]
-                resumen_empresas = resumen_empresas[resumen_empresas["Ingresos"] > 0]
 
         # =========================
         # BLINDAJE 2 (AQUÍ MISMO)
