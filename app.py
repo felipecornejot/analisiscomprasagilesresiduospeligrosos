@@ -630,7 +630,7 @@ with tab4:
         else:
             st.info("No hay datos de participación.")
 
-    st.subheader("Comparación Ingresos vs Egresos por Empresa (robusto, sin burbujas)")
+    st.subheader("Comparación Ingresos vs Egresos por Empresa")
 
     try:
         resumen_empresas = (
@@ -641,31 +641,18 @@ with tab4:
             .dropna(subset=["Ingresos", "Egresos"], how="all")
         )
 
-        # Evita problemas típicos:
-        # - ingresos NaN
-        # - egresos negativos (los mostramos en abs)
-        resumen_empresas["Ingresos"] = resumen_empresas["Ingresos"].fillna(0)
-        resumen_empresas["Egresos"] = resumen_empresas["Egresos"].fillna(0)
+        # Normaliza
+        resumen_empresas["Ingresos"] = pd.to_numeric(resumen_empresas["Ingresos"], errors="coerce").fillna(0)
+        resumen_empresas["Egresos"] = pd.to_numeric(resumen_empresas["Egresos"], errors="coerce").fillna(0)
         resumen_empresas["Egresos_abs"] = resumen_empresas["Egresos"].abs()
 
-        # Si quieres mantener solo empresas con ingresos > 0, déjalo:
+        # ✅ SOLO UNA VEZ (sin duplicado)
         resumen_empresas = resumen_empresas[resumen_empresas["Ingresos"] > 0]
 
-        # =========================
-        # BLINDAJE 2 (AQUÍ MISMO)
-        # =========================
-        resumen_empresas = resumen_empresas.copy()
+        # -------------------------
+        # BLINDAJE DEFINITIVO (para burbujas o cualquier uso posterior)
+        # -------------------------
         resumen_empresas = resumen_empresas.replace([np.inf, -np.inf], np.nan)
-
-        # asegurar numéricos
-        for c in ["Ingresos", "Egresos", "Egresos_abs"]:
-            if c in resumen_empresas.columns:
-                resumen_empresas[c] = pd.to_numeric(resumen_empresas[c], errors="coerce")
-
-        resumen_empresas["Ingresos"] = resumen_empresas["Ingresos"].fillna(0)
-        resumen_empresas["Egresos_abs"] = resumen_empresas["Egresos_abs"].fillna(0).abs()
-
-        # size SIEMPRE válido (>=1, finito)
         resumen_empresas["Size"] = resumen_empresas["Ingresos"].abs()
         resumen_empresas["Size"] = resumen_empresas["Size"].fillna(0)
         resumen_empresas.loc[resumen_empresas["Size"] <= 0, "Size"] = 1
@@ -674,32 +661,19 @@ with tab4:
         if pd.notna(cap) and cap > 0:
             resumen_empresas["Size"] = resumen_empresas["Size"].clip(upper=cap)
 
-        # =========================
-        # (DESPUÉS DE ESTO) TU GRÁFICO
-        # =========================
-
         if resumen_empresas.empty:
             st.info("No hay suficientes datos para la comparativa.")
         else:
+            # Barras (robusto)
             fig_comparativa = go.Figure()
-
-            fig_comparativa.add_trace(
-                go.Bar(
-                    x=resumen_empresas["Empresa"],
-                    y=resumen_empresas["Ingresos"],
-                    name="Ingresos",
-                    marker_color="#2ecc71",
-                )
-            )
-            fig_comparativa.add_trace(
-                go.Bar(
-                    x=resumen_empresas["Empresa"],
-                    y=resumen_empresas["Egresos_abs"],
-                    name="Egresos",
-                    marker_color="#e74c3c",
-                )
-            )
-
+            fig_comparativa.add_trace(go.Bar(
+                x=resumen_empresas["Empresa"], y=resumen_empresas["Ingresos"],
+                name="Ingresos", marker_color="#2ecc71"
+            ))
+            fig_comparativa.add_trace(go.Bar(
+                x=resumen_empresas["Empresa"], y=resumen_empresas["Egresos_abs"],
+                name="Egresos", marker_color="#e74c3c"
+            ))
             fig_comparativa.update_layout(
                 title="Ingresos vs Egresos por Empresa",
                 xaxis_title="Empresa",
@@ -708,16 +682,27 @@ with tab4:
                 hovermode="x unified",
                 xaxis_tickangle=-45,
             )
-
             st.plotly_chart(fig_comparativa, use_container_width=True, key="bar_comparativa_final")
+
+            # (Opcional) Burbuja a prueba de NaN/inf/negativos
+            with st.expander("Ver burbujas (Ingresos vs Egresos)"):
+                fig_bubble = px.scatter(
+                    resumen_empresas,
+                    x="Ingresos",
+                    y="Egresos_abs",
+                    size="Size",
+                    hover_name="Empresa",
+                    size_max=60,
+                    title="Burbujas: Ingresos vs Egresos (tamaño ~ Ingresos)",
+                )
+                st.plotly_chart(fig_bubble, use_container_width=True, key="bubble_safe")
 
             with st.expander("Ver datos detallados"):
                 st.dataframe(resumen_empresas[["Empresa", "Ingresos", "Egresos", "Egresos_abs"]], use_container_width=True)
 
     except Exception as e:
-        st.warning(f"Error al generar el gráfico comparativo: {e}")
+        st.warning(f"Error al generar comparativa: {e}")
         st.dataframe(df_filtrado.groupby("Empresa")[["Ingresos", "Egresos"]].sum().reset_index(), use_container_width=True)
-
 
 # ----------------------------
 # TAB 5
