@@ -560,61 +560,62 @@ with tab4:
         else:
             st.info("No hay datos de participación")
     
-    # Gráfico de burbujas - VERSIÓN SIMPLIFICADA Y SEGURA
-    st.subheader("Relación Ingresos vs Egresos por Empresa")
+    # Gráfico de comparación - VERSIÓN SIMPLIFICADA Y SEGURA
+    st.subheader("Comparación Ingresos vs Egresos por Empresa")
     
     try:
         # Preparar datos de forma segura
         resumen_empresas = df_filtrado.groupby('Empresa').agg({
             'Ingresos': 'sum',
-            'Egresos': 'sum',
-            'Resultado_neto': 'sum'
+            'Egresos': 'sum'
         }).reset_index()
         
-        # Limpiar datos exhaustivamente
+        # Limpiar datos
         resumen_empresas = resumen_empresas.dropna()
-        resumen_empresas = resumen_empresas[resumen_empresas['Ingresos'] > 0]
-        resumen_empresas = resumen_empresas[resumen_empresas['Egresos'] < 0]
         resumen_empresas['Egresos_abs'] = resumen_empresas['Egresos'].abs()
-        resumen_empresas['Resultado_neto_abs'] = resumen_empresas['Resultado_neto'].abs()
+        resumen_empresas = resumen_empresas[resumen_empresas['Ingresos'] > 0]
         
-        # Filtrar valores razonables
-        resumen_empresas = resumen_empresas[
-            (resumen_empresas['Ingresos'] > 0) & 
-            (resumen_empresas['Egresos_abs'] > 0) &
-            (resumen_empresas['Resultado_neto_abs'] > 0)
-        ]
-        
-        if len(resumen_empresas) >= 2:
-            # Usar una versión más simple del gráfico
-            fig_bubble = px.scatter(
-                resumen_empresas,
-                x='Ingresos',
-                y='Egresos_abs',
-                size=[30] * len(resumen_empresas),  # Tamaño constante para evitar errores
-                color='Resultado_neto',
-                hover_name='Empresa',
+        if not resumen_empresas.empty and len(resumen_empresas) >= 1:
+            # Usar gráfico de barras agrupadas (MUCHO MÁS ESTABLE)
+            fig_comparativa = go.Figure()
+            
+            fig_comparativa.add_trace(go.Bar(
+                x=resumen_empresas['Empresa'],
+                y=resumen_empresas['Ingresos'],
+                name='Ingresos',
+                marker_color='#2ecc71'
+            ))
+            
+            fig_comparativa.add_trace(go.Bar(
+                x=resumen_empresas['Empresa'],
+                y=resumen_empresas['Egresos_abs'],
+                name='Egresos',
+                marker_color='#e74c3c'
+            ))
+            
+            fig_comparativa.update_layout(
                 title='Ingresos vs Egresos por Empresa',
-                labels={'Ingresos': 'Ingresos totales ($)', 'Egresos_abs': 'Egresos totales ($)'},
-                color_continuous_scale='RdYlGn'
+                xaxis_title='Empresa',
+                yaxis_title='Monto ($)',
+                barmode='group',
+                hovermode='x unified'
             )
             
-            st.plotly_chart(fig_bubble, use_container_width=True, key="scatter_bubble_simple")
+            st.plotly_chart(fig_comparativa, use_container_width=True, key="bar_comparativa_estable")
             
-            # Mostrar también la tabla de datos
+            # Mostrar tabla de datos
             with st.expander("Ver datos detallados"):
-                st.dataframe(resumen_empresas[['Empresa', 'Ingresos', 'Egresos_abs', 'Resultado_neto']])
+                st.dataframe(resumen_empresas[['Empresa', 'Ingresos', 'Egresos', 'Egresos_abs']])
         else:
-            st.info("No hay suficientes datos para el gráfico de burbujas (se necesitan al menos 2 empresas con datos completos)")
-            # Mostrar tabla como alternativa
-            if not resumen_empresas.empty:
-                st.dataframe(resumen_empresas[['Empresa', 'Ingresos', 'Egresos', 'Resultado_neto']])
+            st.info("No hay suficientes datos para la comparativa")
+            
+            # Mostrar raw data como fallback
+            st.dataframe(df_filtrado[['Empresa', 'Ingresos', 'Egresos']].head(10))
     
     except Exception as e:
-        st.warning(f"No se pudo generar el gráfico de burbujas: {str(e)}")
-        # Mostrar datos en tabla como fallback
-        resumen_simple = df_filtrado.groupby('Empresa')[['Ingresos', 'Egresos', 'Resultado_neto']].sum().reset_index()
-        st.dataframe(resumen_simple)
+        st.warning(f"Error al generar el gráfico: {str(e)}")
+        # Mostrar datos en tabla como último recurso
+        st.dataframe(df_filtrado.groupby('Empresa')[['Ingresos', 'Egresos']].sum().reset_index())
 
 with tab5:
     st.header("Datos Detallados")
