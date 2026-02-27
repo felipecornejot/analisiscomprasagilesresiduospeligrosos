@@ -7,7 +7,13 @@ from plotly.subplots import make_subplots
 from datetime import datetime
 import warnings
 import os
+import pathlib
 
+st.sidebar.markdown("### 🧾 Debug runtime")
+st.sidebar.code(f"__file__ = {__file__}")
+st.sidebar.code(f"cwd = {os.getcwd()}")
+st.sidebar.code(f"files = {sorted([p.name for p in pathlib.Path('.').glob('*.py')])}")
+st.sidebar.code(f"pages = {sorted([str(p) for p in pathlib.Path('pages').glob('*.py')]) if pathlib.Path('pages').exists() else 'NO pages/'}")
 warnings.filterwarnings("ignore")
 
 
