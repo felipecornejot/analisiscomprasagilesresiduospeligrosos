@@ -15,6 +15,7 @@ st.sidebar.code(f"cwd = {os.getcwd()}")
 st.sidebar.code(f"files = {sorted([p.name for p in pathlib.Path('.').glob('*.py')])}")
 st.sidebar.code(f"pages = {sorted([str(p) for p in pathlib.Path('pages').glob('*.py')]) if pathlib.Path('pages').exists() else 'NO pages/'}")
 warnings.filterwarnings("ignore")
+st.sidebar.code(f"RUNNING: {__file__}")
 
 
 # ----------------------------
@@ -649,6 +650,34 @@ with tab4:
 
         # Si quieres mantener solo empresas con ingresos > 0, déjalo:
         resumen_empresas = resumen_empresas[resumen_empresas["Ingresos"] > 0]
+                resumen_empresas = resumen_empresas[resumen_empresas["Ingresos"] > 0]
+
+        # =========================
+        # BLINDAJE 2 (AQUÍ MISMO)
+        # =========================
+        resumen_empresas = resumen_empresas.copy()
+        resumen_empresas = resumen_empresas.replace([np.inf, -np.inf], np.nan)
+
+        # asegurar numéricos
+        for c in ["Ingresos", "Egresos", "Egresos_abs"]:
+            if c in resumen_empresas.columns:
+                resumen_empresas[c] = pd.to_numeric(resumen_empresas[c], errors="coerce")
+
+        resumen_empresas["Ingresos"] = resumen_empresas["Ingresos"].fillna(0)
+        resumen_empresas["Egresos_abs"] = resumen_empresas["Egresos_abs"].fillna(0).abs()
+
+        # size SIEMPRE válido (>=1, finito)
+        resumen_empresas["Size"] = resumen_empresas["Ingresos"].abs()
+        resumen_empresas["Size"] = resumen_empresas["Size"].fillna(0)
+        resumen_empresas.loc[resumen_empresas["Size"] <= 0, "Size"] = 1
+
+        cap = resumen_empresas["Size"].quantile(0.95) if len(resumen_empresas) else 1
+        if pd.notna(cap) and cap > 0:
+            resumen_empresas["Size"] = resumen_empresas["Size"].clip(upper=cap)
+
+        # =========================
+        # (DESPUÉS DE ESTO) TU GRÁFICO
+        # =========================
 
         if resumen_empresas.empty:
             st.info("No hay suficientes datos para la comparativa.")
