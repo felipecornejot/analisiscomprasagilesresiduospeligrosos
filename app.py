@@ -7,6 +7,7 @@ from plotly.subplots import make_subplots
 from datetime import datetime
 import warnings
 import os
+import traceback
 warnings.filterwarnings('ignore')
 
 # Configuración de la página
@@ -110,6 +111,16 @@ def formatear_moneda(valor):
     if pd.isna(valor):
         return "N/A"
     return f"${valor:,.0f}"
+
+def safe_plotly_chart(fig, key):
+    """Función segura para mostrar gráficos de Plotly"""
+    try:
+        st.plotly_chart(fig, use_container_width=True, key=key)
+    except Exception as e:
+        st.error(f"Error al mostrar el gráfico: {str(e)}")
+        st.info("Mostrando datos en formato tabla como alternativa")
+        return False
+    return True
 
 # --- CARGA DE DATOS ---
 
@@ -259,7 +270,7 @@ with col4:
 
 st.markdown("---")
 
-# --- VISUALIZACIONES ---
+# --- VISUALIZACIONES PRINCIPALES ---
 
 # Crear pestañas
 tab1, tab2, tab3, tab4, tab5 = st.tabs([
@@ -280,9 +291,9 @@ with tab1:
         ultimo_mes = df_filtrado['Mes'].max()
         df_ultimo = df_filtrado[df_filtrado['Mes'] == ultimo_mes].copy()
         
-        if not df_ultimo.empty:
+        if not df_ultimo.empty and df_ultimo['Saldo_final'].notna().any():
             fig_saldo = px.bar(
-                df_ultimo,
+                df_ultimo.dropna(subset=['Saldo_final']),
                 x='Empresa',
                 y='Saldo_final',
                 title=f'Saldo Final por Empresa - {ultimo_mes}',
@@ -291,7 +302,7 @@ with tab1:
                 text_auto='.2s'
             )
             fig_saldo.update_layout(xaxis_tickangle=-45)
-            st.plotly_chart(fig_saldo, use_container_width=True, key="bar_saldo")
+            safe_plotly_chart(fig_saldo, "bar_saldo")
         else:
             st.info("No hay datos para el último mes")
     
@@ -317,7 +328,7 @@ with tab1:
                 color_discrete_map={'Ingresos': '#2ecc71', 'Egresos': '#e74c3c'}
             )
             fig_dist.update_layout(yaxis_title="Monto ($)")
-            st.plotly_chart(fig_dist, use_container_width=True, key="box_dist")
+            safe_plotly_chart(fig_dist, "box_dist")
         else:
             st.info("No hay datos suficientes")
     
@@ -326,7 +337,7 @@ with tab1:
     top_ingresos = df_filtrado.groupby('Empresa')['Ingresos'].sum().nlargest(5).reset_index()
     top_ingresos = top_ingresos.dropna()
     
-    if not top_ingresos.empty:
+    if not top_ingresos.empty and top_ingresos['Ingresos'].sum() > 0:
         fig_top = px.bar(
             top_ingresos,
             x='Ingresos',
@@ -337,7 +348,7 @@ with tab1:
             color_continuous_scale='Viridis',
             text_auto='.2s'
         )
-        st.plotly_chart(fig_top, use_container_width=True, key="bar_top")
+        safe_plotly_chart(fig_top, "bar_top")
     else:
         st.info("No hay datos suficientes")
 
@@ -358,7 +369,8 @@ with tab2:
         col1, col2, col3, col4 = st.columns(4)
         
         with col1:
-            st.metric("Saldo actual", formatear_moneda(df_empresa['Saldo_final'].iloc[-1]))
+            ultimo_saldo = df_empresa['Saldo_final'].iloc[-1] if not df_empresa['Saldo_final'].empty else 0
+            st.metric("Saldo actual", formatear_moneda(ultimo_saldo))
         with col2:
             st.metric("Ingresos totales", formatear_moneda(df_empresa['Ingresos'].sum()))
         with col3:
@@ -370,38 +382,41 @@ with tab2:
         
         with col1:
             # Evolución mensual
-            fig_evol = make_subplots(specs=[[{"secondary_y": True}]])
-            
-            fig_evol.add_trace(
-                go.Bar(x=df_empresa['Mes'], y=df_empresa['Ingresos'], name="Ingresos", marker_color='#2ecc71'),
-                secondary_y=False
-            )
-            fig_evol.add_trace(
-                go.Bar(x=df_empresa['Mes'], y=df_empresa['Egresos'], name="Egresos", marker_color='#e74c3c'),
-                secondary_y=False
-            )
-            fig_evol.add_trace(
-                go.Scatter(x=df_empresa['Mes'], y=df_empresa['Saldo_final'], 
-                          name="Saldo final", line=dict(color='#3498db', width=3)),
-                secondary_y=True
-            )
-            
-            fig_evol.update_layout(
-                title=f'Evolución mensual - {empresa_seleccionada}',
-                hovermode='x unified'
-            )
-            fig_evol.update_xaxes(title_text="Mes")
-            fig_evol.update_yaxes(title_text="Ingresos/Egresos ($)", secondary_y=False)
-            fig_evol.update_yaxes(title_text="Saldo final ($)", secondary_y=True)
-            
-            st.plotly_chart(fig_evol, use_container_width=True, key="line_evol_empresa")
+            if not df_empresa[['Ingresos', 'Egresos', 'Saldo_final']].isna().all().all():
+                fig_evol = make_subplots(specs=[[{"secondary_y": True}]])
+                
+                fig_evol.add_trace(
+                    go.Bar(x=df_empresa['Mes'], y=df_empresa['Ingresos'], name="Ingresos", marker_color='#2ecc71'),
+                    secondary_y=False
+                )
+                fig_evol.add_trace(
+                    go.Bar(x=df_empresa['Mes'], y=df_empresa['Egresos'], name="Egresos", marker_color='#e74c3c'),
+                    secondary_y=False
+                )
+                fig_evol.add_trace(
+                    go.Scatter(x=df_empresa['Mes'], y=df_empresa['Saldo_final'], 
+                              name="Saldo final", line=dict(color='#3498db', width=3)),
+                    secondary_y=True
+                )
+                
+                fig_evol.update_layout(
+                    title=f'Evolución mensual - {empresa_seleccionada}',
+                    hovermode='x unified'
+                )
+                fig_evol.update_xaxes(title_text="Mes")
+                fig_evol.update_yaxes(title_text="Ingresos/Egresos ($)", secondary_y=False)
+                fig_evol.update_yaxes(title_text="Saldo final ($)", secondary_y=True)
+                
+                safe_plotly_chart(fig_evol, f"line_evol_empresa_{empresa_seleccionada}")
+            else:
+                st.info("No hay datos de evolución mensual")
         
         with col2:
             # Composición
             total_ingresos = df_empresa['Ingresos'].sum()
             total_egresos = abs(df_empresa['Egresos'].sum())
             
-            if total_ingresos > 0 or total_egresos > 0:
+            if (total_ingresos > 0 or total_egresos > 0) and not (pd.isna(total_ingresos) or pd.isna(total_egresos)):
                 fig_pie = px.pie(
                     values=[total_ingresos, total_egresos],
                     names=['Ingresos', 'Egresos'],
@@ -410,7 +425,7 @@ with tab2:
                     hole=0.4
                 )
                 fig_pie.update_traces(textposition='inside', textinfo='percent+label')
-                st.plotly_chart(fig_pie, use_container_width=True, key="pie_empresa")
+                safe_plotly_chart(fig_pie, f"pie_empresa_{empresa_seleccionada}")
             else:
                 st.info("Sin datos de ingresos/egresos")
         
@@ -434,7 +449,7 @@ with tab3:
         saldo_mensual = df_filtrado.groupby('Mes')['Saldo_final'].sum().reset_index()
         saldo_mensual = saldo_mensual.dropna()
         
-        if not saldo_mensual.empty:
+        if not saldo_mensual.empty and saldo_mensual['Saldo_final'].notna().any():
             fig_saldo_mensual = px.line(
                 saldo_mensual,
                 x='Mes',
@@ -445,7 +460,7 @@ with tab3:
             )
             fig_saldo_mensual.update_traces(line=dict(color='#3498db', width=3))
             fig_saldo_mensual.update_layout(yaxis_title="Saldo total ($)")
-            st.plotly_chart(fig_saldo_mensual, use_container_width=True, key="line_saldo_mensual")
+            safe_plotly_chart(fig_saldo_mensual, "line_saldo_mensual")
         else:
             st.info("No hay datos suficientes")
     
@@ -457,7 +472,7 @@ with tab3:
         }).reset_index()
         flujo_mensual = flujo_mensual.dropna()
         
-        if not flujo_mensual.empty:
+        if not flujo_mensual.empty and (flujo_mensual['Ingresos'].notna().any() or flujo_mensual['Egresos'].notna().any()):
             fig_flujo = go.Figure()
             fig_flujo.add_trace(go.Bar(x=flujo_mensual['Mes'], y=flujo_mensual['Ingresos'], 
                                        name='Ingresos', marker_color='#2ecc71'))
@@ -469,7 +484,7 @@ with tab3:
                 barmode='group',
                 yaxis_title="Monto ($)"
             )
-            st.plotly_chart(fig_flujo, use_container_width=True, key="bar_flujo")
+            safe_plotly_chart(fig_flujo, "bar_flujo")
         else:
             st.info("No hay datos suficientes")
     
@@ -483,16 +498,16 @@ with tab3:
         aggfunc='first'
     ).fillna(0)
     
-    if not pivot_saldos.empty:
+    if not pivot_saldos.empty and pivot_saldos.values.max() > 0:
         fig_heatmap = px.imshow(
             pivot_saldos,
-            title='Saldos (millones de pesos)',
+            title='Saldos (pesos)',
             color_continuous_scale='RdYlGn',
             aspect='auto',
             text_auto='.0f'
         )
         fig_heatmap.update_layout(xaxis_title="Mes", yaxis_title="Empresa")
-        st.plotly_chart(fig_heatmap, use_container_width=True, key="heatmap_saldos")
+        safe_plotly_chart(fig_heatmap, "heatmap_saldos")
     else:
         st.info("No hay datos suficientes para el mapa de calor")
 
@@ -510,8 +525,9 @@ with tab4:
         rentabilidad = rentabilidad.replace([np.inf, -np.inf], np.nan).dropna()
         rentabilidad['Margen'] = (rentabilidad['Resultado_neto'] / rentabilidad['Ingresos'].replace(0, np.nan) * 100).round(1)
         rentabilidad = rentabilidad.sort_values('Resultado_neto', ascending=False)
+        rentabilidad = rentabilidad[rentabilidad['Resultado_neto'].notna()]
         
-        if not rentabilidad.empty:
+        if not rentabilidad.empty and rentabilidad['Resultado_neto'].abs().sum() > 0:
             fig_rent = px.bar(
                 rentabilidad.head(10),
                 x='Resultado_neto',
@@ -523,16 +539,16 @@ with tab4:
                 text_auto='.2s'
             )
             fig_rent.update_layout(xaxis_title="Resultado neto ($)")
-            st.plotly_chart(fig_rent, use_container_width=True, key="bar_rentabilidad")
+            safe_plotly_chart(fig_rent, "bar_rentabilidad")
         else:
             st.info("No hay datos de rentabilidad")
     
     with col2:
         # Participación por empresa
         participacion = df_filtrado.groupby('Empresa')['Ingresos'].sum().sort_values(ascending=False)
-        participacion = participacion.dropna()
+        participacion = participacion[participacion > 0].dropna()
         
-        if not participacion.empty:
+        if not participacion.empty and participacion.sum() > 0:
             fig_part = px.pie(
                 values=participacion.values,
                 names=participacion.index,
@@ -540,60 +556,65 @@ with tab4:
                 hole=0.4
             )
             fig_part.update_traces(textposition='inside', textinfo='percent+label')
-            st.plotly_chart(fig_part, use_container_width=True, key="pie_participacion")
+            safe_plotly_chart(fig_part, "pie_participacion")
         else:
             st.info("No hay datos de participación")
     
-    # Gráfico de burbujas - CORREGIDO
+    # Gráfico de burbujas - VERSIÓN SIMPLIFICADA Y SEGURA
     st.subheader("Relación Ingresos vs Egresos por Empresa")
     
-    resumen_empresas = df_filtrado.groupby('Empresa').agg({
-        'Ingresos': 'sum',
-        'Egresos': 'sum',
-        'Resultado_neto': 'sum'
-    }).reset_index()
-    
-    # Limpiar datos para el gráfico de burbujas
-    resumen_empresas = resumen_empresas.dropna(subset=['Ingresos', 'Egresos', 'Resultado_neto'])
-    resumen_empresas = resumen_empresas[resumen_empresas['Ingresos'] != 0]
-    resumen_empresas['Egresos_abs'] = resumen_empresas['Egresos'].abs()
-    resumen_empresas['Resultado_neto_abs'] = resumen_empresas['Resultado_neto'].abs()
-    
-    # Filtrar valores válidos para el tamaño de burbuja
-    resumen_empresas = resumen_empresas[resumen_empresas['Resultado_neto_abs'] > 0]
-    
-    if not resumen_empresas.empty and len(resumen_empresas) >= 2:
-        try:
+    try:
+        # Preparar datos de forma segura
+        resumen_empresas = df_filtrado.groupby('Empresa').agg({
+            'Ingresos': 'sum',
+            'Egresos': 'sum',
+            'Resultado_neto': 'sum'
+        }).reset_index()
+        
+        # Limpiar datos exhaustivamente
+        resumen_empresas = resumen_empresas.dropna()
+        resumen_empresas = resumen_empresas[resumen_empresas['Ingresos'] > 0]
+        resumen_empresas = resumen_empresas[resumen_empresas['Egresos'] < 0]
+        resumen_empresas['Egresos_abs'] = resumen_empresas['Egresos'].abs()
+        resumen_empresas['Resultado_neto_abs'] = resumen_empresas['Resultado_neto'].abs()
+        
+        # Filtrar valores razonables
+        resumen_empresas = resumen_empresas[
+            (resumen_empresas['Ingresos'] > 0) & 
+            (resumen_empresas['Egresos_abs'] > 0) &
+            (resumen_empresas['Resultado_neto_abs'] > 0)
+        ]
+        
+        if len(resumen_empresas) >= 2:
+            # Usar una versión más simple del gráfico
             fig_bubble = px.scatter(
                 resumen_empresas,
                 x='Ingresos',
                 y='Egresos_abs',
-                size='Resultado_neto_abs',
+                size=[30] * len(resumen_empresas),  # Tamaño constante para evitar errores
                 color='Resultado_neto',
                 hover_name='Empresa',
                 title='Ingresos vs Egresos por Empresa',
                 labels={'Ingresos': 'Ingresos totales ($)', 'Egresos_abs': 'Egresos totales ($)'},
-                color_continuous_scale='RdYlGn',
-                size_max=60
+                color_continuous_scale='RdYlGn'
             )
             
-            # Línea de referencia y=x
-            max_val = max(resumen_empresas['Ingresos'].max(), resumen_empresas['Egresos_abs'].max())
-            fig_bubble.add_shape(
-                type='line',
-                x0=0, y0=0,
-                x1=max_val,
-                y1=max_val,
-                line=dict(color='gray', width=1, dash='dash')
-            )
+            st.plotly_chart(fig_bubble, use_container_width=True, key="scatter_bubble_simple")
             
-            st.plotly_chart(fig_bubble, use_container_width=True, key="scatter_bubble")
-        except Exception as e:
-            st.warning(f"No se pudo generar el gráfico de burbujas: {e}")
+            # Mostrar también la tabla de datos
+            with st.expander("Ver datos detallados"):
+                st.dataframe(resumen_empresas[['Empresa', 'Ingresos', 'Egresos_abs', 'Resultado_neto']])
+        else:
+            st.info("No hay suficientes datos para el gráfico de burbujas (se necesitan al menos 2 empresas con datos completos)")
             # Mostrar tabla como alternativa
-            st.dataframe(resumen_empresas[['Empresa', 'Ingresos', 'Egresos_abs', 'Resultado_neto']])
-    else:
-        st.info("No hay suficientes datos para el gráfico de burbujas")
+            if not resumen_empresas.empty:
+                st.dataframe(resumen_empresas[['Empresa', 'Ingresos', 'Egresos', 'Resultado_neto']])
+    
+    except Exception as e:
+        st.warning(f"No se pudo generar el gráfico de burbujas: {str(e)}")
+        # Mostrar datos en tabla como fallback
+        resumen_simple = df_filtrado.groupby('Empresa')[['Ingresos', 'Egresos', 'Resultado_neto']].sum().reset_index()
+        st.dataframe(resumen_simple)
 
 with tab5:
     st.header("Datos Detallados")
