@@ -1,793 +1,660 @@
 import streamlit as st
-
-# Configuración de la página - PRIMERO SIEMPRE
-st.set_page_config(
-    page_title="Analizador de Compras Ágiles - Residuos",
-    page_icon="♻️",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
-
-# Verificar imports
-try:
-    import plotly.express as px
-    import plotly.graph_objects as go
-    from plotly.subplots import make_subplots
-except ImportError as e:
-    st.error(f"""
-    ❌ **Error de importación: {e}**
-    
-    Por favor, verifica que todas las dependencias estén instaladas.
-    """)
-    st.stop()
-
 import pandas as pd
 import numpy as np
-import re
+import plotly.express as px
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 from datetime import datetime
 import warnings
 import os
 warnings.filterwarnings('ignore')
 
-# Título y descripción principal
-st.title("♻️ Analizador de Compras Ágiles - Gestión de Residuos")
+# Configuración de la página
+st.set_page_config(
+    page_title="Dashboard Financiero - Resumen Ingresos/Egresos",
+    page_icon="💰",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
+# Título y descripción
+st.title("💰 Dashboard Financiero - Resumen de Ingresos y Egresos")
 st.markdown("""
     <div style='background-color: #f0f2f6; padding: 20px; border-radius: 10px; margin-bottom: 20px;'>
-    <h4>📊 Dashboard interactivo para el análisis de licitaciones públicas de gestión de residuos (peligrosos, no peligrosos y mixtas)</h4>
-    <p>Esta aplicación permite explorar en detalle las licitaciones adjudicadas con clasificación automática por tipo de residuo.</p>
+    <h4>📊 Análisis detallado de la evolución financiera de empresas por mes</h4>
+    <p>Visualización interactiva de saldos, ingresos y egresos para cada entidad.</p>
     </div>
 """, unsafe_allow_html=True)
 
 # --- FUNCIONES DE PROCESAMIENTO ---
 
 @st.cache_data
-def cargar_y_procesar_datos(uploaded_file=None):
+def cargar_datos_financieros(uploaded_file=None):
     """
-    Carga y procesa los datos del archivo CSV
+    Carga y procesa los datos del archivo Excel con múltiples hojas
     """
-    # Nombre del archivo por defecto
-    archivo_por_defecto = 'ComprasAgiles_filtrado_residuos_clasificado_peligrosos_no_peligrosos_mixtas.csv'
+    archivo_por_defecto = 'Resumen ingresos-egresos.xlsx'
     
     if uploaded_file is not None:
-        # Caso 1: Usuario subió un archivo
-        df = pd.read_csv(uploaded_file, sep=';', encoding='utf-8')
+        df_dict = pd.read_excel(uploaded_file, sheet_name=None, header=None)
         st.sidebar.success("✅ Archivo cargado manualmente")
-        
     else:
-        # Caso 2: Intentar cargar archivo por defecto del repositorio
         if os.path.exists(archivo_por_defecto):
             try:
-                df = pd.read_csv(archivo_por_defecto, sep=';', encoding='utf-8')
-                st.sidebar.success(f"✅ Archivo base cargado: {len(df)} licitaciones")
+                df_dict = pd.read_excel(archivo_por_defecto, sheet_name=None, header=None)
+                st.sidebar.success(f"✅ Archivo base cargado: {len(df_dict)} meses")
             except Exception as e:
-                st.sidebar.error(f"❌ Error al cargar archivo por defecto: {e}")
-                df = pd.DataFrame()
+                st.sidebar.error(f"❌ Error al cargar archivo: {e}")
+                return None
         else:
-            st.sidebar.error(f"""
-            ❌ No se encontró el archivo '{archivo_por_defecto}'
-            
-            Por favor, asegúrate de que el archivo existe en el repositorio.
-            """)
-            df = pd.DataFrame()
+            st.sidebar.error(f"❌ No se encontró el archivo '{archivo_por_defecto}'")
+            return None
     
-    # Si no hay datos, mostrar advertencia
-    if df.empty:
-        st.warning("⚠️ No hay datos para procesar. Por favor, sube un archivo CSV válido.")
-        return df
+    # Procesar cada hoja (mes)
+    datos_completos = []
     
-    # Limpieza y procesamiento
-    df['FechaPublicacion'] = pd.to_datetime(df['FechaPublicacion'], format='%d/%m/%Y %H:%M:%S', errors='coerce')
-    df['Año'] = df['FechaPublicacion'].dt.year
-    df['Mes'] = df['FechaPublicacion'].dt.month
-    df['MesNombre'] = df['FechaPublicacion'].dt.month_name().str[:3]
-    df['Trimestre'] = df['FechaPublicacion'].dt.quarter
-    df['Año-Mes'] = df['FechaPublicacion'].dt.to_period('M').astype(str)
-    
-    # Extraer región
-    df['Region'] = df['Organismo'].apply(extraer_region)
-    
-    # Procesar montos
-    df['Monto_Numérico_CLP'] = df['MontoLicitacion'].apply(extraer_monto_numerico)
-    df['Monto_CLP_Millones'] = df['Monto_Numérico_CLP'] / 1_000_000
-    df['Monto_UTM_Estimado'] = df['MontoLicitacion'].apply(extraer_utm)
-    
-    # Clasificar tamaño de licitación
-    df['Tamaño_Licitacion'] = pd.cut(
-        df['Monto_CLP_Millones'],
-        bins=[0, 10, 50, 200, float('inf')],
-        labels=['Pequeña (< 10M)', 'Mediana (10-50M)', 'Grande (50-200M)', 'Megaproyecto (> 200M)']
-    )
-    
-    return df
-
-def extraer_region(organismo):
-    """Extrae la región del nombre del organismo"""
-    organismo_str = str(organismo).upper()
-    
-    regiones = {
-        'Metropolitana': ['METROPOLITANA', 'SANTIAGO', 'MAIPU', 'SAN RAMON', 'RENCA', 'PROVIDENCIA', 
-                         'LAS CONDES', 'NUNOA', 'LA CISTERNA', 'VITACURA', 'LO ESPEJO', 'CERRO NAVIA',
-                         'CONCHALI', 'MACUL', 'LA REINA', 'PEÑAFLOR', 'EL MONTE', 'PAINE', 'PEDRO AGUIRRE CERDA',
-                         'SAN BERNARDO', 'EL BOSQUE'],
-        'Valparaíso': ['VALPARAISO', 'SAN FELIPE', 'VIÑA DEL MAR', 'QUILPUE', 'CARTAGENA', 'SAN ANTONIO',
-                      'LOS ANDES', 'QUILLOTA', 'ZAPALLAR', 'NOGALES', 'LA LIGUA', 'PUCHUNCAVI', 'QUINTERO',
-                      'SAN ESTEBAN', 'CALLE LARGA', 'QUINTA DE TILCOCO', 'LIMACHE', 'SANTA MARIA', 'CONCON',
-                      'OLMUE', 'EL QUISCO', 'EL TABO'],
-        'Biobío': ['BIO BIO', 'CONCEPCIÓN', 'TALCAHUANO', 'LOS ANGELES', 'CHIGUAYANTE', 'SAN PEDRO DE LA PAZ',
-                  'CORONEL', 'LOTA', 'CURANILAHUE', 'MULCHEN', 'NACIMIENTO', 'YUNGAY', 'CABRERO', 'PENCO'],
-        'La Araucanía': ['ARAUCANIA', 'TEMUCO', 'ANGOL', 'VICTORIA', 'LAUTARO', 'NUEVA IMPERIAL', 'VILCUN',
-                        'CUNCO', 'GORBEA', 'CURACAUTIN', 'LUMACO', 'CHOLCHOL', 'TEODORO SCHMIDT', 'MELIPEUCO'],
-        'Los Lagos': ['LOS LAGOS', 'PUERTO MONTT', 'OSORNO', 'CASTRO', 'ANCUD', 'PUERTO VARAS', 'LLANQUIHUE',
-                      'PALENA', 'CHILOE', 'CALBUCO', 'MAULLIN', 'QUEMCHI'],
-        'Magallanes': ['MAGALLANES', 'PUNTA ARENAS', 'PORVENIR', 'PUERTO NATALES', 'PORVENIR', 'RIO VERDE'],
-        'Coquimbo': ['COQUIMBO', 'LA SERENA', 'OVALLE', 'ILLAPEL', 'COMBARBALA', 'ANDACOLLO'],
-        'Aysén': ['AYSEN', 'COYHAIQUE', 'PUERTO AYSEN', 'COCHRANE', 'CISNES'],
-        "O'Higgins": ['OHIGGINS', 'RANCAGUA', 'SAN FERNANDO', 'SAN VICENTE', 'PICHIDEGUA', 'LAS CABRAS',
-                      'PEUMO', 'COLTAUCO', 'DOÑIHUE', 'CODEGUA', 'MOSTAZAL', 'OLIVAR'],
-        'Maule': ['MAULE', 'CURICO', 'TALCA', 'LINARES', 'CAUQUENES', 'CONSTITUCION', 'PARRAL', 'SAN JAVIER',
-                  'MOLINA', 'SAGRADA FAMILIA', 'PELARCO', 'TENO', 'CAUQUENES'],
-        'Ñuble': ['ÑUBLE', 'CHILLAN', 'SAN CARLOS', 'BULNES', 'COBQUECURA', 'QUIRIHUE', 'COIHUECO'],
-        'Arica y Parinacota': ['ARICA', 'PARINACOTA'],
-        'Tarapacá': ['TARAPACA', 'IQUIQUE', 'ALTO HOSPICIO', 'POZO ALMONTE'],
-        'Los Ríos': ['LOS RIOS', 'VALDIVIA', 'LA UNION', 'RIO BUENO', 'PANGUIPULLI'],
-        'Atacama': ['ATACAMA', 'COPIAPO', 'VALLENAR', 'HUASCO', 'ALTO DEL CARMEN'],
-        'Antofagasta': ['ANTOFAGASTA', 'CALAMA', 'TOCOPILLA', 'MARIA ELENA', 'OLLAGUE', 'SIERRA GORDA', 'TALTAL']
-    }
-    
-    for region, keywords in regiones.items():
-        if any(keyword in organismo_str for keyword in keywords):
-            return region
-    
-    return 'Otra / Nacional'
-
-def extraer_monto_numerico(monto_str):
-    """Extrae un valor numérico del campo MontoLicitacion"""
-    if pd.isna(monto_str) or monto_str in ['', 'nan']:
-        return np.nan
-    
-    monto_str = str(monto_str).replace('.', '').replace(',', '').strip()
-    
-    # Si es un número puro
-    if monto_str.isdigit():
+    for mes, df in df_dict.items():
         try:
-            return float(monto_str)
-        except:
-            return np.nan
+            # Limpiar y procesar el DataFrame
+            df_limpio = df.iloc[4:8, 1:13].copy()  # Filas 5-8, columnas B-M (índices 1-12)
+            df_limpio.columns = ['Recauchaje Insamar', 'Banco Chile_1', 'Logística', 'Sustrend', 
+                                'Sustrend Laboratorios', 'Volltech', 'Dario E.I.R.L.', 
+                                'Sangha Inmobiliaria', 'Banco Chile_2', 'Inversiones Sangha', 
+                                'Wellnes Academy', 'Banco Santander Stgo']
+            
+            # Asignar índices (filas)
+            df_limpio.index = ['Saldo inicial', 'Ingresos', 'Egresos', 'Saldo final']
+            
+            # Transformar a formato largo
+            df_melted = df_limpio.T.reset_index()
+            df_melted.columns = ['Empresa', 'Saldo_inicial', 'Ingresos', 'Egresos', 'Saldo_final']
+            df_melted['Mes'] = mes
+            
+            # Limpiar valores (convertir a numérico)
+            for col in ['Saldo_inicial', 'Ingresos', 'Egresos', 'Saldo_final']:
+                df_melted[col] = pd.to_numeric(df_melted[col], errors='coerce')
+            
+            # Eliminar filas con todos NaN o empresas sin datos
+            df_melted = df_melted.dropna(subset=['Saldo_inicial', 'Ingresos', 'Egresos', 'Saldo_final'], how='all')
+            df_melted = df_melted[~df_melted['Empresa'].str.contains('Banco', na=False)]
+            
+            datos_completos.append(df_melted)
+            
+        except Exception as e:
+            st.warning(f"Error procesando mes {mes}: {e}")
+            continue
     
-    # Si tiene UTM
-    if 'UTM' in monto_str.upper():
-        numeros = re.findall(r'[\d.]+', monto_str)
-        if numeros:
-            try:
-                valor_utm = float(numeros[0].replace('.', ''))
-                if len(numeros) > 1:
-                    valor_utm2 = float(numeros[1].replace('.', ''))
-                    valor_utm = (valor_utm + valor_utm2) / 2
-                return valor_utm * 60000
-            except:
-                return np.nan
-    
-    # Si tiene UF
-    if 'UF' in monto_str.upper():
-        numeros = re.findall(r'[\d.]+', monto_str)
-        if numeros:
-            try:
-                valor_uf = float(numeros[0].replace('.', ''))
-                return valor_uf * 38000  # Valor UF aproximado
-            except:
-                return np.nan
-    
-    return np.nan
+    if datos_completos:
+        df_final = pd.concat(datos_completos, ignore_index=True)
+        
+        # Ordenar meses cronológicamente
+        orden_meses = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio',
+                      'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre']
+        df_final['Mes'] = pd.Categorical(df_final['Mes'], categories=orden_meses, ordered=True)
+        df_final = df_final.sort_values(['Mes', 'Empresa'])
+        
+        # Calcular métricas adicionales
+        df_final['Resultado_neto'] = df_final['Ingresos'] + df_final['Egresos']  # Egresos son negativos
+        df_final['Variacion_saldo'] = df_final['Saldo_final'] - df_final['Saldo_inicial']
+        df_final['Margen'] = (df_final['Resultado_neto'] / df_final['Ingresos'].replace(0, np.nan)) * 100
+        
+        # Limpiar valores infinitos y NaN
+        df_final = df_final.replace([np.inf, -np.inf], np.nan)
+        
+        return df_final
+    else:
+        return None
 
-def extraer_utm(monto_str):
-    """Extrae el valor en UTM si está presente"""
-    monto_str = str(monto_str)
-    if 'UTM' in monto_str.upper():
-        numeros = re.findall(r'[\d.]+', monto_str)
-        if numeros:
-            try:
-                if len(numeros) > 1:
-                    return f"{numeros[0]}-{numeros[1]} UTM"
-                return f"{numeros[0]} UTM"
-            except:
-                return np.nan
-    return np.nan
+def formatear_moneda(valor):
+    """Formatea valores como moneda chilena"""
+    if pd.isna(valor):
+        return "N/A"
+    return f"${valor:,.0f}"
 
 # --- CARGA DE DATOS ---
 
 with st.sidebar:
-    st.image("https://img.icons8.com/color/96/000000/recycle-sign.png", width=100)
+    st.image("https://img.icons8.com/color/96/000000/money--v1.png", width=100)
     st.header("⚙️ Configuración")
     
     uploaded_file = st.file_uploader(
-        "Cargar archivo CSV de licitaciones",
-        type=['csv'],
-        help="Sube el archivo CSV con los datos de licitaciones. Si no subes ninguno, se usará el archivo base del repositorio.",
+        "Cargar archivo Excel",
+        type=['xlsx'],
+        help="Sube el archivo 'Resumen ingresos-egresos.xlsx'",
         key="file_uploader"
     )
     
-    # Cargar datos
     with st.spinner('Cargando y procesando datos...'):
-        df = cargar_y_procesar_datos(uploaded_file)
+        df = cargar_datos_financieros(uploaded_file)
     
-    if not df.empty:
-        st.success(f"✅ Datos cargados: {len(df)} licitaciones")
+    if df is not None and not df.empty:
+        st.success(f"✅ Datos cargados: {df['Mes'].nunique()} meses, {df['Empresa'].nunique()} empresas")
         
         # Mostrar info del dataset
         st.markdown("---")
-        st.markdown("### 📊 Resumen del Dataset")
+        st.markdown("### 📊 Resumen")
         col1, col2 = st.columns(2)
         with col1:
-            st.metric("Años", f"{df['Año'].min()} - {df['Año'].max()}")
+            st.metric("Meses", df['Mes'].nunique())
         with col2:
-            st.metric("Regiones", df['Region'].nunique())
+            st.metric("Empresas", df['Empresa'].nunique())
         
         st.markdown("---")
         st.header("🔍 Filtros")
         
-        # Filtros interactivos
-        años_disponibles = sorted(df['Año'].dropna().unique())
-        años_seleccionados = st.multiselect(
-            "Años",
-            options=años_disponibles,
-            default=años_disponibles if años_disponibles else [],
-            key="filtro_anos"
+        # Filtros
+        meses_disponibles = sorted(df['Mes'].unique())
+        meses_seleccionados = st.multiselect(
+            "📅 Meses",
+            options=meses_disponibles,
+            default=meses_disponibles,
+            key="filtro_meses"
         )
         
-        regiones_disponibles = sorted(df['Region'].dropna().unique())
-        regiones_seleccionadas = st.multiselect(
-            "Regiones",
-            options=regiones_disponibles,
-            default=regiones_disponibles if regiones_disponibles else [],
-            key="filtro_regiones"
+        empresas_disponibles = sorted(df['Empresa'].unique())
+        empresas_seleccionadas = st.multiselect(
+            "🏢 Empresas",
+            options=empresas_disponibles,
+            default=empresas_disponibles,
+            key="filtro_empresas"
         )
         
-        # Filtro por categoría de residuo
-        categorias_residuo = sorted(df['CategoriaResiduo'].dropna().unique())
-        categorias_seleccionadas = st.multiselect(
-            "🗑️ Tipo de Residuo",
-            options=categorias_residuo,
-            default=categorias_residuo if categorias_residuo else [],
-            key="filtro_categoria"
-        )
+        # Rango de valores
+        st.markdown("### 💰 Filtros de montos")
         
-        # Filtro por nivel de confianza
-        confianza_disponible = sorted(df['ConfianzaClasificacion'].dropna().unique())
-        confianza_seleccionada = st.multiselect(
-            "🎯 Nivel de Confianza",
-            options=confianza_disponible,
-            default=confianza_disponible if confianza_disponible else [],
-            key="filtro_confianza"
-        )
+        # Manejar valores NaN para los sliders
+        saldo_max = df['Saldo_final'].max()
+        if pd.isna(saldo_max):
+            saldo_max = 0
+            
+        ingreso_max = df['Ingresos'].max()
+        if pd.isna(ingreso_max):
+            ingreso_max = 0
         
-        # Filtro de búsqueda por texto
-        busqueda = st.text_input("🔎 Buscar en nombre u organismo", "", key="busqueda_texto")
-        
-        # Botón para aplicar filtros
-        aplicar_filtros = st.button("🔄 Aplicar Filtros", type="primary", key="boton_filtros")
+        col1, col2 = st.columns(2)
+        with col1:
+            rango_saldo = st.slider(
+                "Saldo final (millones)",
+                min_value=0.0,
+                max_value=float(saldo_max/1_000_000) if saldo_max > 0 else 100.0,
+                value=(0.0, float(saldo_max/1_000_000) if saldo_max > 0 else 100.0),
+                step=1.0,
+                key="rango_saldo"
+            )
+        with col2:
+            rango_ingreso = st.slider(
+                "Ingresos (millones)",
+                min_value=0.0,
+                max_value=float(ingreso_max/1_000_000) if ingreso_max > 0 else 100.0,
+                value=(0.0, float(ingreso_max/1_000_000) if ingreso_max > 0 else 100.0),
+                step=1.0,
+                key="rango_ingreso"
+            )
     else:
         st.error("❌ No se pudieron cargar los datos")
+        st.stop()
 
 # --- APLICAR FILTROS ---
 
-if not df.empty:
-    df_filtrado = df.copy()
+df_filtrado = df.copy()
 
-    if años_seleccionados:
-        df_filtrado = df_filtrado[df_filtrado['Año'].isin(años_seleccionados)]
-    if regiones_seleccionadas:
-        df_filtrado = df_filtrado[df_filtrado['Region'].isin(regiones_seleccionadas)]
-    if categorias_seleccionadas:
-        df_filtrado = df_filtrado[df_filtrado['CategoriaResiduo'].isin(categorias_seleccionadas)]
-    if confianza_seleccionada:
-        df_filtrado = df_filtrado[df_filtrado['ConfianzaClasificacion'].isin(confianza_seleccionada)]
-    if busqueda:
-        df_filtrado = df_filtrado[
-            df_filtrado['NombreLicitacion'].str.contains(busqueda, case=False, na=False) |
-            df_filtrado['Organismo'].str.contains(busqueda, case=False, na=False)
-        ]
+if meses_seleccionados:
+    df_filtrado = df_filtrado[df_filtrado['Mes'].isin(meses_seleccionados)]
+if empresas_seleccionadas:
+    df_filtrado = df_filtrado[df_filtrado['Empresa'].isin(empresas_seleccionadas)]
+if rango_saldo:
+    df_filtrado = df_filtrado[
+        (df_filtrado['Saldo_final'].fillna(0).abs() >= rango_saldo[0]*1_000_000) &
+        (df_filtrado['Saldo_final'].fillna(0).abs() <= rango_saldo[1]*1_000_000)
+    ]
+if rango_ingreso:
+    df_filtrado = df_filtrado[
+        (df_filtrado['Ingresos'].fillna(0).abs() >= rango_ingreso[0]*1_000_000) &
+        (df_filtrado['Ingresos'].fillna(0).abs() <= rango_ingreso[1]*1_000_000)
+    ]
 
-    # --- MÉTRICAS PRINCIPALES ---
+# Verificar que hay datos después de filtrar
+if df_filtrado.empty:
+    st.warning("⚠️ No hay datos que cumplan con los filtros seleccionados.")
+    st.stop()
 
-    st.markdown("## 📈 Panel de Control")
+# --- MÉTRICAS PRINCIPALES ---
 
-    col1, col2, col3, col4 = st.columns(4)
+st.markdown("## 📈 Panel de Control Financiero")
 
+col1, col2, col3, col4 = st.columns(4)
+
+with col1:
+    saldo_total = df_filtrado.groupby('Mes')['Saldo_final'].sum().sum()
+    st.metric(
+        label="💰 Saldo Total Acumulado",
+        value=formatear_moneda(saldo_total),
+        delta=f"Promedio: {formatear_moneda(saldo_total/df_filtrado['Mes'].nunique())}"
+    )
+
+with col2:
+    ingresos_totales = df_filtrado.groupby('Mes')['Ingresos'].sum().sum()
+    st.metric(
+        label="📈 Ingresos Totales",
+        value=formatear_moneda(ingresos_totales),
+        delta=f"Promedio mes: {formatear_moneda(ingresos_totales/df_filtrado['Mes'].nunique())}"
+    )
+
+with col3:
+    egresos_totales = df_filtrado.groupby('Mes')['Egresos'].sum().sum()
+    st.metric(
+        label="📉 Egresos Totales",
+        value=formatear_moneda(abs(egresos_totales)),
+        delta=f"Promedio mes: {formatear_moneda(abs(egresos_totales)/df_filtrado['Mes'].nunique())}",
+        delta_color="inverse"
+    )
+
+with col4:
+    resultado_neto = ingresos_totales + egresos_totales
+    st.metric(
+        label="💵 Resultado Neto",
+        value=formatear_moneda(resultado_neto),
+        delta=f"Margen: {(resultado_neto/ingresos_totales*100):.1f}%" if ingresos_totales != 0 else "N/A"
+    )
+
+st.markdown("---")
+
+# --- VISUALIZACIONES ---
+
+# Crear pestañas
+tab1, tab2, tab3, tab4, tab5 = st.tabs([
+    "📊 Visión General",
+    "🏢 Análisis por Empresa",
+    "📅 Evolución Temporal",
+    "💰 Comparativa",
+    "📋 Datos Detallados"
+])
+
+with tab1:
+    st.header("Visión General del Portfolio")
+    
+    col1, col2 = st.columns(2)
+    
     with col1:
-        total_licitaciones = len(df_filtrado)
-        st.metric(
-            label="📋 Total Licitaciones",
-            value=f"{total_licitaciones:,}",
-            delta=f"{len(df_filtrado)/len(df)*100:.1f}% del total"
-        )
-
+        # Saldo por empresa (último mes disponible)
+        ultimo_mes = df_filtrado['Mes'].max()
+        df_ultimo = df_filtrado[df_filtrado['Mes'] == ultimo_mes].copy()
+        
+        if not df_ultimo.empty:
+            fig_saldo = px.bar(
+                df_ultimo,
+                x='Empresa',
+                y='Saldo_final',
+                title=f'Saldo Final por Empresa - {ultimo_mes}',
+                color='Saldo_final',
+                color_continuous_scale='RdYlGn',
+                text_auto='.2s'
+            )
+            fig_saldo.update_layout(xaxis_tickangle=-45)
+            st.plotly_chart(fig_saldo, use_container_width=True, key="bar_saldo")
+        else:
+            st.info("No hay datos para el último mes")
+    
     with col2:
-        monto_total = df_filtrado['Monto_CLP_Millones'].sum()
-        st.metric(
-            label="💰 Monto Total (MM CLP)",
-            value=f"${monto_total:,.0f}M" if not pd.isna(monto_total) else "N/A",
-            delta="Suma de montos disponibles"
+        # Distribución de ingresos vs egresos
+        df_melt = df_filtrado.melt(
+            id_vars=['Empresa', 'Mes'],
+            value_vars=['Ingresos', 'Egresos'],
+            var_name='Tipo',
+            value_name='Monto'
         )
-
-    with col3:
-        monto_promedio = df_filtrado['Monto_CLP_Millones'].mean()
-        st.metric(
-            label="📊 Monto Promedio (MM CLP)",
-            value=f"${monto_promedio:,.1f}M" if not pd.isna(monto_promedio) else "N/A",
-            delta="Por licitación"
+        df_melt['Monto_abs'] = df_melt['Monto'].abs()
+        df_melt = df_melt.dropna(subset=['Monto_abs'])
+        
+        if not df_melt.empty:
+            fig_dist = px.box(
+                df_melt,
+                x='Tipo',
+                y='Monto_abs',
+                color='Tipo',
+                title='Distribución de Ingresos y Egresos',
+                points='all',
+                color_discrete_map={'Ingresos': '#2ecc71', 'Egresos': '#e74c3c'}
+            )
+            fig_dist.update_layout(yaxis_title="Monto ($)")
+            st.plotly_chart(fig_dist, use_container_width=True, key="box_dist")
+        else:
+            st.info("No hay datos suficientes")
+    
+    # Top empresas por ingresos
+    st.subheader("Top 5 Empresas por Ingresos")
+    top_ingresos = df_filtrado.groupby('Empresa')['Ingresos'].sum().nlargest(5).reset_index()
+    top_ingresos = top_ingresos.dropna()
+    
+    if not top_ingresos.empty:
+        fig_top = px.bar(
+            top_ingresos,
+            x='Ingresos',
+            y='Empresa',
+            title='Empresas con mayores ingresos totales',
+            orientation='h',
+            color='Ingresos',
+            color_continuous_scale='Viridis',
+            text_auto='.2s'
         )
+        st.plotly_chart(fig_top, use_container_width=True, key="bar_top")
+    else:
+        st.info("No hay datos suficientes")
 
-    with col4:
-        organizaciones_unicas = df_filtrado['Organismo'].nunique()
-        st.metric(
-            label="🏢 Organizaciones",
-            value=f"{organizaciones_unicas:,}",
-            delta="Organismos distintos"
-        )
-
-    st.markdown("---")
-
-    # --- VISUALIZACIONES PRINCIPALES ---
-
-    # Crear pestañas para organizar el contenido
-    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
-        "📊 Visión General",
-        "🗑️ Análisis por Tipo Residuo",
-        "🗺️ Análisis Regional",
-        "🏛️ Análisis por Organismo",
-        "📅 Tendencia Temporal",
-        "📋 Datos Detallados"
-    ])
-
-    with tab1:
-        st.header("Visión General del Mercado")
+with tab2:
+    st.header("Análisis Detallado por Empresa")
+    
+    # Selector de empresa
+    empresa_seleccionada = st.selectbox(
+        "Selecciona una empresa",
+        options=df_filtrado['Empresa'].unique(),
+        key="select_empresa"
+    )
+    
+    df_empresa = df_filtrado[df_filtrado['Empresa'] == empresa_seleccionada].copy()
+    df_empresa = df_empresa.dropna(subset=['Saldo_final', 'Ingresos', 'Egresos'])
+    
+    if not df_empresa.empty:
+        col1, col2, col3, col4 = st.columns(4)
+        
+        with col1:
+            st.metric("Saldo actual", formatear_moneda(df_empresa['Saldo_final'].iloc[-1]))
+        with col2:
+            st.metric("Ingresos totales", formatear_moneda(df_empresa['Ingresos'].sum()))
+        with col3:
+            st.metric("Egresos totales", formatear_moneda(abs(df_empresa['Egresos'].sum())))
+        with col4:
+            st.metric("Resultado neto", formatear_moneda(df_empresa['Resultado_neto'].sum()))
         
         col1, col2 = st.columns(2)
         
         with col1:
-            # Distribución por tipo de residuo
-            if not df_filtrado.empty and 'CategoriaResiduo' in df_filtrado.columns:
-                residuo_counts = df_filtrado['CategoriaResiduo'].value_counts().reset_index()
-                residuo_counts.columns = ['CategoriaResiduo', 'count']
-                
-                # Colores personalizados
-                color_map = {
-                    'peligrosos': '#e74c3c',
-                    'no peligrosos': '#2ecc71',
-                    'mixtas': '#f39c12'
-                }
-                
-                fig_residuos = px.pie(
-                    residuo_counts,
-                    values='count',
-                    names='CategoriaResiduo',
-                    title='Distribución por Tipo de Residuo',
-                    hole=0.4,
-                    color='CategoriaResiduo',
-                    color_discrete_map=color_map
-                )
-                fig_residuos.update_traces(textposition='inside', textinfo='percent+label')
-                st.plotly_chart(fig_residuos, use_container_width=True, key="pie_residuos")
-            else:
-                st.info("No hay datos suficientes para mostrar el gráfico")
+            # Evolución mensual
+            fig_evol = make_subplots(specs=[[{"secondary_y": True}]])
+            
+            fig_evol.add_trace(
+                go.Bar(x=df_empresa['Mes'], y=df_empresa['Ingresos'], name="Ingresos", marker_color='#2ecc71'),
+                secondary_y=False
+            )
+            fig_evol.add_trace(
+                go.Bar(x=df_empresa['Mes'], y=df_empresa['Egresos'], name="Egresos", marker_color='#e74c3c'),
+                secondary_y=False
+            )
+            fig_evol.add_trace(
+                go.Scatter(x=df_empresa['Mes'], y=df_empresa['Saldo_final'], 
+                          name="Saldo final", line=dict(color='#3498db', width=3)),
+                secondary_y=True
+            )
+            
+            fig_evol.update_layout(
+                title=f'Evolución mensual - {empresa_seleccionada}',
+                hovermode='x unified'
+            )
+            fig_evol.update_xaxes(title_text="Mes")
+            fig_evol.update_yaxes(title_text="Ingresos/Egresos ($)", secondary_y=False)
+            fig_evol.update_yaxes(title_text="Saldo final ($)", secondary_y=True)
+            
+            st.plotly_chart(fig_evol, use_container_width=True, key="line_evol_empresa")
         
         with col2:
-            # Nivel de confianza de la clasificación
-            if not df_filtrado.empty and 'ConfianzaClasificacion' in df_filtrado.columns:
-                confianza_counts = df_filtrado['ConfianzaClasificacion'].value_counts().reset_index()
-                confianza_counts.columns = ['ConfianzaClasificacion', 'count']
-                
-                fig_confianza = px.bar(
-                    confianza_counts,
-                    x='ConfianzaClasificacion',
-                    y='count',
-                    title='Nivel de Confianza en Clasificación',
-                    color='ConfianzaClasificacion',
-                    color_discrete_map={'alta': '#2ecc71', 'media (inferencia)': '#f39c12'}
+            # Composición
+            total_ingresos = df_empresa['Ingresos'].sum()
+            total_egresos = abs(df_empresa['Egresos'].sum())
+            
+            if total_ingresos > 0 or total_egresos > 0:
+                fig_pie = px.pie(
+                    values=[total_ingresos, total_egresos],
+                    names=['Ingresos', 'Egresos'],
+                    title=f'Composición - {empresa_seleccionada}',
+                    color_discrete_map={'Ingresos': '#2ecc71', 'Egresos': '#e74c3c'},
+                    hole=0.4
                 )
-                st.plotly_chart(fig_confianza, use_container_width=True, key="bar_confianza")
+                fig_pie.update_traces(textposition='inside', textinfo='percent+label')
+                st.plotly_chart(fig_pie, use_container_width=True, key="pie_empresa")
             else:
-                st.info("No hay datos suficientes para mostrar el gráfico")
+                st.info("Sin datos de ingresos/egresos")
         
-        # Evolución anual por tipo de residuo
-        if not df_filtrado.empty and 'Año' in df_filtrado.columns:
-            evolucion_tipo = df_filtrado.groupby(['Año', 'CategoriaResiduo']).size().reset_index(name='Cantidad')
-            
-            fig_evolucion_tipo = px.line(
-                evolucion_tipo,
-                x='Año',
-                y='Cantidad',
-                color='CategoriaResiduo',
-                title='Evolución por Tipo de Residuo',
+        # Tabla de datos mensuales
+        st.subheader("Datos mensuales")
+        df_display = df_empresa[['Mes', 'Saldo_inicial', 'Ingresos', 'Egresos', 'Saldo_final', 'Resultado_neto']].copy()
+        for col in ['Saldo_inicial', 'Ingresos', 'Egresos', 'Saldo_final', 'Resultado_neto']:
+            df_display[col] = df_display[col].apply(formatear_moneda)
+        
+        st.dataframe(df_display, use_container_width=True, hide_index=True)
+    else:
+        st.info(f"No hay datos disponibles para {empresa_seleccionada}")
+
+with tab3:
+    st.header("Evolución Temporal")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        # Evolución del saldo total
+        saldo_mensual = df_filtrado.groupby('Mes')['Saldo_final'].sum().reset_index()
+        saldo_mensual = saldo_mensual.dropna()
+        
+        if not saldo_mensual.empty:
+            fig_saldo_mensual = px.line(
+                saldo_mensual,
+                x='Mes',
+                y='Saldo_final',
+                title='Evolución del Saldo Total',
                 markers=True,
-                color_discrete_map={'peligrosos': '#e74c3c', 'no peligrosos': '#2ecc71', 'mixtas': '#f39c12'}
+                line_shape='spline'
             )
-            st.plotly_chart(fig_evolucion_tipo, use_container_width=True, key="line_evolucion_tipo")
-
-    with tab2:
-        st.header("Análisis Detallado por Tipo de Residuo")
+            fig_saldo_mensual.update_traces(line=dict(color='#3498db', width=3))
+            fig_saldo_mensual.update_layout(yaxis_title="Saldo total ($)")
+            st.plotly_chart(fig_saldo_mensual, use_container_width=True, key="line_saldo_mensual")
+        else:
+            st.info("No hay datos suficientes")
+    
+    with col2:
+        # Ingresos vs Egresos por mes
+        flujo_mensual = df_filtrado.groupby('Mes').agg({
+            'Ingresos': 'sum',
+            'Egresos': 'sum'
+        }).reset_index()
+        flujo_mensual = flujo_mensual.dropna()
         
-        if not df_filtrado.empty and 'CategoriaResiduo' in df_filtrado.columns:
-            # Selector de tipo de residuo
-            tipo_analisis = st.selectbox(
-                "Selecciona tipo de residuo para análisis detallado",
-                options=['Todos'] + sorted(df_filtrado['CategoriaResiduo'].unique()),
-                key="select_tipo_analisis"
+        if not flujo_mensual.empty:
+            fig_flujo = go.Figure()
+            fig_flujo.add_trace(go.Bar(x=flujo_mensual['Mes'], y=flujo_mensual['Ingresos'], 
+                                       name='Ingresos', marker_color='#2ecc71'))
+            fig_flujo.add_trace(go.Bar(x=flujo_mensual['Mes'], y=flujo_mensual['Egresos'], 
+                                       name='Egresos', marker_color='#e74c3c'))
+            
+            fig_flujo.update_layout(
+                title='Ingresos vs Egresos por Mes',
+                barmode='group',
+                yaxis_title="Monto ($)"
+            )
+            st.plotly_chart(fig_flujo, use_container_width=True, key="bar_flujo")
+        else:
+            st.info("No hay datos suficientes")
+    
+    # Heatmap de saldos por empresa y mes
+    st.subheader("Mapa de Calor - Saldos por Empresa y Mes")
+    
+    pivot_saldos = df_filtrado.pivot_table(
+        values='Saldo_final',
+        index='Empresa',
+        columns='Mes',
+        aggfunc='first'
+    ).fillna(0)
+    
+    if not pivot_saldos.empty:
+        fig_heatmap = px.imshow(
+            pivot_saldos,
+            title='Saldos (millones de pesos)',
+            color_continuous_scale='RdYlGn',
+            aspect='auto',
+            text_auto='.0f'
+        )
+        fig_heatmap.update_layout(xaxis_title="Mes", yaxis_title="Empresa")
+        st.plotly_chart(fig_heatmap, use_container_width=True, key="heatmap_saldos")
+    else:
+        st.info("No hay datos suficientes para el mapa de calor")
+
+with tab4:
+    st.header("Análisis Comparativo")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        # Ranking de rentabilidad
+        rentabilidad = df_filtrado.groupby('Empresa').agg({
+            'Resultado_neto': 'sum',
+            'Ingresos': 'sum'
+        }).reset_index()
+        rentabilidad = rentabilidad.replace([np.inf, -np.inf], np.nan).dropna()
+        rentabilidad['Margen'] = (rentabilidad['Resultado_neto'] / rentabilidad['Ingresos'].replace(0, np.nan) * 100).round(1)
+        rentabilidad = rentabilidad.sort_values('Resultado_neto', ascending=False)
+        
+        if not rentabilidad.empty:
+            fig_rent = px.bar(
+                rentabilidad.head(10),
+                x='Resultado_neto',
+                y='Empresa',
+                title='Ranking de Rentabilidad (Resultado Neto)',
+                orientation='h',
+                color='Margen',
+                color_continuous_scale='RdYlGn',
+                text_auto='.2s'
+            )
+            fig_rent.update_layout(xaxis_title="Resultado neto ($)")
+            st.plotly_chart(fig_rent, use_container_width=True, key="bar_rentabilidad")
+        else:
+            st.info("No hay datos de rentabilidad")
+    
+    with col2:
+        # Participación por empresa
+        participacion = df_filtrado.groupby('Empresa')['Ingresos'].sum().sort_values(ascending=False)
+        participacion = participacion.dropna()
+        
+        if not participacion.empty:
+            fig_part = px.pie(
+                values=participacion.values,
+                names=participacion.index,
+                title='Participación en Ingresos Totales',
+                hole=0.4
+            )
+            fig_part.update_traces(textposition='inside', textinfo='percent+label')
+            st.plotly_chart(fig_part, use_container_width=True, key="pie_participacion")
+        else:
+            st.info("No hay datos de participación")
+    
+    # Gráfico de burbujas - CORREGIDO
+    st.subheader("Relación Ingresos vs Egresos por Empresa")
+    
+    resumen_empresas = df_filtrado.groupby('Empresa').agg({
+        'Ingresos': 'sum',
+        'Egresos': 'sum',
+        'Resultado_neto': 'sum'
+    }).reset_index()
+    
+    # Limpiar datos para el gráfico de burbujas
+    resumen_empresas = resumen_empresas.dropna(subset=['Ingresos', 'Egresos', 'Resultado_neto'])
+    resumen_empresas = resumen_empresas[resumen_empresas['Ingresos'] != 0]
+    resumen_empresas['Egresos_abs'] = resumen_empresas['Egresos'].abs()
+    resumen_empresas['Resultado_neto_abs'] = resumen_empresas['Resultado_neto'].abs()
+    
+    # Filtrar valores válidos para el tamaño de burbuja
+    resumen_empresas = resumen_empresas[resumen_empresas['Resultado_neto_abs'] > 0]
+    
+    if not resumen_empresas.empty and len(resumen_empresas) >= 2:
+        try:
+            fig_bubble = px.scatter(
+                resumen_empresas,
+                x='Ingresos',
+                y='Egresos_abs',
+                size='Resultado_neto_abs',
+                color='Resultado_neto',
+                hover_name='Empresa',
+                title='Ingresos vs Egresos por Empresa',
+                labels={'Ingresos': 'Ingresos totales ($)', 'Egresos_abs': 'Egresos totales ($)'},
+                color_continuous_scale='RdYlGn',
+                size_max=60
             )
             
-            df_tipo = df_filtrado if tipo_analisis == 'Todos' else df_filtrado[df_filtrado['CategoriaResiduo'] == tipo_analisis]
-            
-            if not df_tipo.empty:
-                col1, col2, col3 = st.columns(3)
-                
-                with col1:
-                    st.metric("Licitaciones", len(df_tipo))
-                with col2:
-                    monto_tipo = df_tipo['Monto_CLP_Millones'].sum()
-                    st.metric("Monto Total (MM CLP)", f"${monto_tipo:,.0f}M" if not pd.isna(monto_tipo) else "N/A")
-                with col3:
-                    if tipo_analisis != 'Todos':
-                        confianza_pct = (df_tipo['ConfianzaClasificacion'] == 'alta').mean() * 100
-                        st.metric("Clasificaciones con confianza alta", f"{confianza_pct:.1f}%")
-                
-                col1, col2 = st.columns(2)
-                
-                with col1:
-                    # Top organismos por tipo de residuo
-                    top_organismos_tipo = df_tipo['Organismo'].value_counts().head(10)
-                    if not top_organismos_tipo.empty:
-                        fig_top_tipo = px.bar(
-                            x=top_organismos_tipo.values,
-                            y=top_organismos_tipo.index,
-                            title=f'Top 10 Organismos - {tipo_analisis}',
-                            orientation='h',
-                            color=top_organismos_tipo.values,
-                            color_continuous_scale='Viridis'
-                        )
-                        fig_top_tipo.update_layout(xaxis_title="Cantidad de Licitaciones", yaxis_title="")
-                        st.plotly_chart(fig_top_tipo, use_container_width=True, key="bar_top_tipo")
-                
-                with col2:
-                    # Distribución por tamaño de licitación
-                    tamaño_counts = df_tipo['Tamaño_Licitacion'].value_counts().reset_index()
-                    tamaño_counts.columns = ['Tamaño', 'count']
-                    
-                    fig_tamaño = px.pie(
-                        tamaño_counts,
-                        values='count',
-                        names='Tamaño',
-                        title=f'Distribución por Tamaño - {tipo_analisis}',
-                        hole=0.3
-                    )
-                    st.plotly_chart(fig_tamaño, use_container_width=True, key="pie_tamaño")
-                
-                # Distribución regional para este tipo de residuo
-                region_tipo = df_tipo['Region'].value_counts().reset_index()
-                region_tipo.columns = ['Region', 'Cantidad']
-                
-                fig_region_tipo = px.bar(
-                    region_tipo.head(15),
-                    x='Cantidad',
-                    y='Region',
-                    title=f'Distribución Regional - {tipo_analisis}',
-                    orientation='h',
-                    color='Cantidad',
-                    color_continuous_scale='Reds'
-                )
-                st.plotly_chart(fig_region_tipo, use_container_width=True, key="bar_region_tipo")
-        else:
-            st.info("No hay datos suficientes para el análisis por tipo de residuo")
-
-    with tab3:
-        st.header("Análisis Regional Detallado")
-        
-        if not df_filtrado.empty and 'Region' in df_filtrado.columns and len(df_filtrado['Region'].unique()) > 0:
-            # Selector de región para análisis detallado
-            region_analisis = st.selectbox(
-                "Selecciona una región para análisis detallado",
-                options=['Todas'] + sorted(df_filtrado['Region'].unique()),
-                key="select_region_analisis"
+            # Línea de referencia y=x
+            max_val = max(resumen_empresas['Ingresos'].max(), resumen_empresas['Egresos_abs'].max())
+            fig_bubble.add_shape(
+                type='line',
+                x0=0, y0=0,
+                x1=max_val,
+                y1=max_val,
+                line=dict(color='gray', width=1, dash='dash')
             )
             
-            df_region = df_filtrado if region_analisis == 'Todas' else df_filtrado[df_filtrado['Region'] == region_analisis]
-            
-            if not df_region.empty:
-                col1, col2, col3, col4 = st.columns(4)
-                
-                with col1:
-                    st.metric("Licitaciones", len(df_region))
-                with col2:
-                    monto_region = df_region['Monto_CLP_Millones'].sum()
-                    st.metric("Monto Total (MM CLP)", f"${monto_region:,.0f}M" if not pd.isna(monto_region) else "N/A")
-                with col3:
-                    st.metric("Organismos", df_region['Organismo'].nunique())
-                with col4:
-                    residuo_pred = df_region['CategoriaResiduo'].mode()[0] if not df_region['CategoriaResiduo'].empty else "N/A"
-                    st.metric("Tipo residuo predominante", residuo_pred)
-                
-                col1, col2 = st.columns(2)
-                
-                with col1:
-                    # Distribución por tipo de residuo en la región
-                    residuo_region = df_region['CategoriaResiduo'].value_counts().reset_index()
-                    residuo_region.columns = ['CategoriaResiduo', 'Cantidad']
-                    
-                    fig_residuo_region = px.pie(
-                        residuo_region,
-                        values='Cantidad',
-                        names='CategoriaResiduo',
-                        title=f'Tipos de Residuo en {region_analisis}',
-                        hole=0.3,
-                        color='CategoriaResiduo',
-                        color_discrete_map={'peligrosos': '#e74c3c', 'no peligrosos': '#2ecc71', 'mixtas': '#f39c12'}
-                    )
-                    st.plotly_chart(fig_residuo_region, use_container_width=True, key="pie_residuo_region")
-                
-                with col2:
-                    # Top organismos en la región
-                    top_organismos_region = df_region['Organismo'].value_counts().head(8)
-                    if not top_organismos_region.empty:
-                        fig_top_region = px.bar(
-                            x=top_organismos_region.values,
-                            y=top_organismos_region.index,
-                            title=f'Top 8 Organismos en {region_analisis}',
-                            orientation='h',
-                            color=top_organismos_region.values,
-                            color_continuous_scale='Viridis'
-                        )
-                        fig_top_region.update_layout(xaxis_title="Cantidad", yaxis_title="")
-                        st.plotly_chart(fig_top_region, use_container_width=True, key="bar_top_region")
-                
-                # Evolución en la región
-                evolucion_region = df_region.groupby(['Año', 'CategoriaResiduo']).size().reset_index(name='Cantidad')
-                if not evolucion_region.empty:
-                    fig_evol_region = px.line(
-                        evolucion_region,
-                        x='Año',
-                        y='Cantidad',
-                        color='CategoriaResiduo',
-                        title=f'Evolución en {region_analisis} por Tipo de Residuo',
-                        markers=True,
-                        color_discrete_map={'peligrosos': '#e74c3c', 'no peligrosos': '#2ecc71', 'mixtas': '#f39c12'}
-                    )
-                    st.plotly_chart(fig_evol_region, use_container_width=True, key="line_evol_region")
-        else:
-            st.info("No hay datos suficientes para el análisis regional")
+            st.plotly_chart(fig_bubble, use_container_width=True, key="scatter_bubble")
+        except Exception as e:
+            st.warning(f"No se pudo generar el gráfico de burbujas: {e}")
+            # Mostrar tabla como alternativa
+            st.dataframe(resumen_empresas[['Empresa', 'Ingresos', 'Egresos_abs', 'Resultado_neto']])
+    else:
+        st.info("No hay suficientes datos para el gráfico de burbujas")
 
-    with tab4:
-        st.header("Análisis por Organismo")
+with tab5:
+    st.header("Datos Detallados")
+    
+    if not df_filtrado.empty:
+        # Selector de columnas
+        columnas_disponibles = ['Mes', 'Empresa', 'Saldo_inicial', 'Ingresos', 'Egresos', 
+                                'Saldo_final', 'Resultado_neto', 'Variacion_saldo', 'Margen']
         
-        if not df_filtrado.empty:
-            # Top organismos general
-            st.subheader("Top 20 Organismos Licitantes")
-            
-            top_20 = df_filtrado.groupby('Organismo').agg({
-                'IDLicitacion': 'count',
-                'Monto_CLP_Millones': 'sum'
-            }).round(2).rename(columns={'IDLicitacion': 'Cantidad', 'Monto_CLP_Millones': 'Monto_Total_MM'})
-            
-            # Agregar tipo de residuo más común
-            top_residuo = df_filtrado.groupby('Organismo')['CategoriaResiduo'].agg(lambda x: x.mode()[0] if not x.mode().empty else 'N/A')
-            top_20 = top_20.join(top_residuo)
-            
-            top_20 = top_20.sort_values('Cantidad', ascending=False).head(20).reset_index()
-            
-            if not top_20.empty:
-                col1, col2 = st.columns([2, 1])
-                
-                with col1:
-                    fig_top = px.bar(
-                        top_20,
-                        x='Cantidad',
-                        y='Organismo',
-                        title='Top 20 - Por Cantidad de Licitaciones',
-                        orientation='h',
-                        color='Monto_Total_MM',
-                        color_continuous_scale='Viridis',
-                        text='Cantidad'
-                    )
-                    fig_top.update_layout(yaxis={'categoryorder':'total ascending'})
-                    st.plotly_chart(fig_top, use_container_width=True, key="bar_top_organismos")
-                
-                with col2:
-                    # Tabla resumen
-                    st.dataframe(
-                        top_20[['Organismo', 'Cantidad', 'Monto_Total_MM', 'CategoriaResiduo']],
-                        use_container_width=True,
-                        hide_index=True,
-                        column_config={
-                            "Monto_Total_MM": st.column_config.NumberColumn(
-                                "Monto Total (MM CLP)",
-                                format="$ %.0fM"
-                            ),
-                            "CategoriaResiduo": st.column_config.TextColumn(
-                                "Tipo Principal"
-                            )
-                        },
-                        key="tabla_top_organismos"
-                    )
-                
-                # Gráfico de burbujas: Cantidad vs Monto
-                fig_burbujas = px.scatter(
-                    top_20,
-                    x='Cantidad',
-                    y='Monto_Total_MM',
-                    size='Monto_Total_MM',
-                    color='CategoriaResiduo',
-                    hover_name='Organismo',
-                    title='Relación Cantidad vs Monto por Organismo',
-                    labels={'Cantidad': 'Número de Licitaciones', 'Monto_Total_MM': 'Monto Total (MM CLP)'},
-                    color_discrete_map={'peligrosos': '#e74c3c', 'no peligrosos': '#2ecc71', 'mixtas': '#f39c12'}
-                )
-                st.plotly_chart(fig_burbujas, use_container_width=True, key="scatter_burbujas")
-        else:
-            st.info("No hay datos suficientes para el análisis por organismo")
-
-    with tab5:
-        st.header("Análisis de Tendencia Temporal")
+        columnas_mostrar = st.multiselect(
+            "Selecciona columnas a mostrar",
+            options=columnas_disponibles,
+            default=['Mes', 'Empresa', 'Ingresos', 'Egresos', 'Saldo_final', 'Resultado_neto'],
+            key="select_columnas"
+        )
         
-        if not df_filtrado.empty:
+        if columnas_mostrar:
+            df_display = df_filtrado[columnas_mostrar].copy()
+            
+            # Formatear números
+            for col in ['Saldo_inicial', 'Ingresos', 'Egresos', 'Saldo_final', 'Resultado_neto', 'Variacion_saldo']:
+                if col in df_display.columns:
+                    df_display[col] = df_display[col].apply(formatear_moneda)
+            
+            if 'Margen' in df_display.columns:
+                df_display['Margen'] = df_display['Margen'].round(1).astype(str) + '%'
+            
+            st.dataframe(
+                df_display,
+                use_container_width=True,
+                hide_index=True,
+                key="dataframe_detallado"
+            )
+            
+            # Estadísticas y descarga
             col1, col2 = st.columns(2)
             
             with col1:
-                # Vista por mes
-                tendencia_mensual = df_filtrado.groupby(df_filtrado['FechaPublicacion'].dt.to_period('M')).size().reset_index(name='Cantidad')
-                if not tendencia_mensual.empty:
-                    tendencia_mensual['Fecha'] = tendencia_mensual['FechaPublicacion'].astype(str)
-                    
-                    fig_mensual = px.line(
-                        tendencia_mensual,
-                        x='Fecha',
-                        y='Cantidad',
-                        title='Tendencia Mensual de Licitaciones',
-                        markers=True
-                    )
-                    fig_mensual.update_xaxes(title_text="Mes-Año", tickangle=45)
-                    fig_mensual.update_yaxes(title_text="Cantidad")
-                    st.plotly_chart(fig_mensual, use_container_width=True, key="line_tendencia_mensual")
+                st.info(f"**Total registros:** {len(df_display)}")
+                st.info(f"**Meses:** {df_filtrado['Mes'].nunique()}")
+                st.info(f"**Empresas:** {df_filtrado['Empresa'].nunique()}")
             
             with col2:
-                # Distribución por trimestre
-                trimestres = df_filtrado.groupby(['Año', 'Trimestre']).size().reset_index(name='Cantidad')
-                if not trimestres.empty:
-                    trimestres['Año-Trim'] = trimestres['Año'].astype(str) + '-T' + trimestres['Trimestre'].astype(str)
-                    
-                    fig_trimestral = px.bar(
-                        trimestres,
-                        x='Año-Trim',
-                        y='Cantidad',
-                        title='Licitaciones por Trimestre',
-                        color='Año',
-                        color_discrete_sequence=px.colors.qualitative.Bold
-                    )
-                    fig_trimestral.update_xaxes(title_text="Año-Trimestre", tickangle=45)
-                    fig_trimestral.update_yaxes(title_text="Cantidad")
-                    st.plotly_chart(fig_trimestral, use_container_width=True, key="bar_trimestral")
-            
-            # Análisis de estacionalidad por tipo de residuo
-            st.subheader("Patrón Estacional por Tipo de Residuo")
-            
-            estacionalidad = df_filtrado.groupby(['MesNombre', 'CategoriaResiduo']).size().reset_index(name='Cantidad')
-            meses_orden = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 
-                          'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
-            
-            if not estacionalidad.empty:
-                fig_estacional = px.bar(
-                    estacionalidad,
-                    x='MesNombre',
-                    y='Cantidad',
-                    color='CategoriaResiduo',
-                    title='Distribución Mensual por Tipo de Residuo',
-                    barmode='group',
-                    category_orders={"MesNombre": meses_orden},
-                    color_discrete_map={'peligrosos': '#e74c3c', 'no peligrosos': '#2ecc71', 'mixtas': '#f39c12'}
+                # Botón de descarga
+                csv = df_filtrado.to_csv(index=False, encoding='utf-8-sig')
+                st.download_button(
+                    label="📥 Descargar datos completos como CSV",
+                    data=csv,
+                    file_name=f"datos_financieros_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                    mime="text/csv",
+                    type="primary",
+                    key="download_button"
                 )
-                fig_estacional.update_layout(xaxis_title="Mes", yaxis_title="Cantidad")
-                st.plotly_chart(fig_estacional, use_container_width=True, key="bar_estacional")
-            
-            # Análisis YoY (Year over Year)
-            st.subheader("Crecimiento Interanual por Tipo de Residuo")
-            
-            yoy = df_filtrado.groupby(['Año', 'CategoriaResiduo']).size().reset_index(name='Cantidad')
-            
-            if not yoy.empty:
-                fig_yoy = px.line(
-                    yoy,
-                    x='Año',
-                    y='Cantidad',
-                    color='CategoriaResiduo',
-                    title='Crecimiento Interanual por Tipo de Residuo',
-                    markers=True,
-                    color_discrete_map={'peligrosos': '#e74c3c', 'no peligrosos': '#2ecc71', 'mixtas': '#f39c12'}
-                )
-                st.plotly_chart(fig_yoy, use_container_width=True, key="line_yoy")
-            else:
-                st.info("No hay datos suficientes para el análisis de crecimiento interanual")
-        else:
-            st.info("No hay datos suficientes para el análisis temporal")
+    else:
+        st.info("No hay datos para mostrar")
 
-    with tab6:
-        st.header("Datos Detallados")
-        
-        if not df_filtrado.empty:
-            # Selector de columnas a mostrar
-            columnas_disponibles = ['IDLicitacion', 'NombreLicitacion', 'Tipo', 'Estado', 'FechaPublicacion',
-                                   'Organismo', 'Region', 'CategoriaResiduo', 'ConfianzaClasificacion',
-                                   'MontoLicitacion', 'Monto_CLP_Millones', 'Tamaño_Licitacion']
-            
-            columnas_mostrar = st.multiselect(
-                "Selecciona columnas a mostrar",
-                options=columnas_disponibles,
-                default=['IDLicitacion', 'NombreLicitacion', 'Organismo', 'Region', 
-                        'CategoriaResiduo', 'FechaPublicacion', 'MontoLicitacion'],
-                key="select_columnas"
-            )
-            
-            if columnas_mostrar:
-                df_display = df_filtrado[columnas_mostrar].copy()
-                
-                # Formatear fecha para mejor visualización
-                if 'FechaPublicacion' in df_display.columns:
-                    df_display['FechaPublicacion'] = df_display['FechaPublicacion'].dt.strftime('%d/%m/%Y')
-                
-                # Mostrar tabla con formato mejorado
-                st.dataframe(
-                    df_display,
-                    use_container_width=True,
-                    hide_index=True,
-                    column_config={
-                        "Monto_CLP_Millones": st.column_config.NumberColumn(
-                            "Monto (MM CLP)",
-                            format="$ %.2fM"
-                        ),
-                        "MontoLicitacion": st.column_config.TextColumn(
-                            "Monto Original"
-                        ),
-                        "CategoriaResiduo": st.column_config.TextColumn(
-                            "Tipo Residuo"
-                        )
-                    },
-                    key="dataframe_detallado"
-                )
-                
-                # Estadísticas y descargas
-                col1, col2 = st.columns(2)
-                
-                with col1:
-                    st.info(f"**Total registros:** {len(df_display)}")
-                    if not df_filtrado['FechaPublicacion'].empty:
-                        fecha_min = df_filtrado['FechaPublicacion'].min().strftime('%d/%m/%Y')
-                        fecha_max = df_filtrado['FechaPublicacion'].max().strftime('%d/%m/%Y')
-                        st.info(f"**Rango de fechas:** {fecha_min} a {fecha_max}")
-                    
-                    # Resumen por tipo de residuo
-                    resumen = df_filtrado['CategoriaResiduo'].value_counts()
-                    st.info(f"**Distribución:** {', '.join([f'{k}: {v}' for k, v in resumen.items()])}")
-                
-                with col2:
-                    # Botón de descarga
-                    csv = df_display.to_csv(index=False, encoding='utf-8-sig')
-                    st.download_button(
-                        label="📥 Descargar datos como CSV",
-                        data=csv,
-                        file_name=f"licitaciones_residuos_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-                        mime="text/csv",
-                        type="primary",
-                        key="download_button"
-                    )
-            else:
-                st.warning("Selecciona al menos una columna para mostrar")
-        else:
-            st.info("No hay datos para mostrar")
-
-    # Footer
-    st.markdown("---")
-    st.markdown("""
-        <div style='text-align: center; color: #666; padding: 10px;'>
-            <p>♻️ Analizador de Compras Ágiles - Gestión de Residuos | Desarrollado con Streamlit y Python</p>
-            <p style='font-size: 0.8em;'>Clasificación automática por tipo de residuo con nivel de confianza</p>
-        </div>
-    """, unsafe_allow_html=True)
-
-else:
-    st.warning("👆 Por favor, sube un archivo CSV válido usando el botón en la barra lateral izquierda.")
+# Footer
+st.markdown("---")
+st.markdown("""
+    <div style='text-align: center; color: #666; padding: 10px;'>
+        <p>💰 Dashboard Financiero - Resumen de Ingresos y Egresos | Desarrollado con Streamlit y Python</p>
+        <p style='font-size: 0.8em;'>Datos actualizados al {}</p>
+    </div>
+""".format(datetime.now().strftime('%d/%m/%Y')), unsafe_allow_html=True)
